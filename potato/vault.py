@@ -69,6 +69,8 @@ KNOWN_KEYS = {
                           "renewal_url": "https://console.anthropic.com/settings/billing", "dashboard_url": "https://console.anthropic.com/settings/keys"},
     "EM_API_KEY": {"category": "api_key", "desc": "东方财富AI SaaS API Key（上证异动/业绩点评/行业研究）",
                    "renewal_url": "https://ai-saas.eastmoney.com", "dashboard_url": "https://ai-saas.eastmoney.com"},
+    "IWENCAI_API_KEY": {"category": "api_key", "desc": "问财智能选股API Key（自然语言选股/宏观/资讯搜索）",
+                        "renewal_url": "https://openapi.iwencai.com", "dashboard_url": "https://www.iwencai.com"},
 }
 
 _CIPHER = None

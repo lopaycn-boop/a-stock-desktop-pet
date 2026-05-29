@@ -52,6 +52,7 @@ from potato.eastmoney import (
     EastMoneyClient, analyze_sentiment, get_stock_changes,
     get_hot_tables, get_chip_distribution, get_realtime_quote,
 )
+from potato.iwencai import IwencaiClient, format_iwencai_to_text
 
 logging.basicConfig(
     level=logging.INFO,
@@ -391,6 +392,9 @@ class PotatoPetBrain:
         "em_hotspot": false,
         "em_sentiment": null,
         "realtime_quote": null,
+        "iwencai_query": null,
+        "iwencai_select": null,
+        "iwencai_search": null,
         "stock_changes": false,
         "hot_tables": false,
         "chip_distribution": null
@@ -471,6 +475,9 @@ class PotatoPetBrain:
 46. 用户说"热点板块/热门概念" → em_hotspot=true（热点发现）
 47. 用户说"XX股票实时行情/现在多少钱" → realtime_quote="股票代码"
 48. 用户说"深度分析/多步分析/仔细分析" → plan_execute_analysis=["代码1","代码2"]（计划-执行多步分析模式，先制定分析计划再逐步执行，质量更高）
+49. 用户说"帮我选股/筛选XX条件的股票/连续涨停的股票" → iwencai_query="自然语言选股条件"（问财智能选股）
+50. 用户说"查宏观/CPI/GDP/PMI" → iwencai_query="宏观指标名称"（问财宏观数据）
+51. 用户说"搜索XX新闻/研报/公告" → iwencai_search={"keyword":"关键词","channel":"news/report/investor/announcement"}
 28. 用户说"买入/卖出XX" → trade_execute={{"symbol":"代码","name":"名称","action":"BUY/SELL","confidence":0.8,"reasoning":"理由","entry_price":"价格","target_price":"目标价","stop_loss":"止损价"}}
 29. 【自主操盘】操盘调度器在交易日自动启动，4个阶段全自动运行：
     - 盘前扫描(9:00) → AI自动抓新闻+筛选标的
@@ -853,6 +860,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "em_sentiment":
                 await handle_em_sentiment(payload, send_to_frontend)
+
+            elif msg_type == "iwencai_query":
+                await handle_iwencai_query(payload, send_to_frontend)
+
+            elif msg_type == "iwencai_select":
+                await handle_iwencai_select(payload, send_to_frontend)
+
+            elif msg_type == "iwencai_search":
+                await handle_iwencai_search(payload, send_to_frontend)
 
             else:
                 logger.warning("Unknown msg_type from frontend: %s", msg_type)
@@ -1515,6 +1531,27 @@ async def _process_ai_actions(actions: dict, send_func):
             symbol = str(actions["chip_distribution"]).strip()[:10]
             await _emit_step(send_func, "chip_distribution", "running", f"筹码分布: {symbol}")
             _spawn(handle_chip_distribution_ai({"symbol": symbol}, send_func))
+
+        if actions.get("iwencai_query"):
+            query = str(actions["iwencai_query"])[:500]
+            await _emit_step(send_func, "iwencai_query", "running", f"问财查询: {query[:30]}")
+            _spawn(handle_iwencai_query({"query": query}, send_func))
+
+        if actions.get("iwencai_select"):
+            query = str(actions["iwencai_select"])[:500]
+            await _emit_step(send_func, "iwencai_select", "running", f"智能选股: {query[:30]}")
+            _spawn(handle_iwencai_select({"query": query}, send_func))
+
+        if actions.get("iwencai_search"):
+            search_data = actions["iwencai_search"]
+            if isinstance(search_data, dict):
+                keyword = str(search_data.get("keyword", ""))[:200]
+                channel = str(search_data.get("channel", "news"))[:20]
+            else:
+                keyword = str(search_data)[:200]
+                channel = "news"
+            await _emit_step(send_func, "iwencai_search", "running", f"资讯搜索: {keyword[:30]}")
+            _spawn(handle_iwencai_search({"keyword": keyword, "channel": channel}, send_func))
 
     except Exception as e:
         logger.warning("Action processing error: %s", e)
@@ -3425,5 +3462,51 @@ async def handle_chip_distribution_ai(payload: dict, send_func):
             await send_reply(f"📊 {symbol} 筹码分布已获取", "neutral", send_func)
         else:
             await send_reply(f"{symbol} 筹码数据暂无", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_iwencai_query(payload: dict, send_func):
+    query = payload.get("query", "")
+    if not query:
+        await send_func("error", {"info": "请输入查询内容"})
+        return
+    try:
+        client = IwencaiClient()
+        result = await asyncio.to_thread(client.query, query)
+        text = format_iwencai_to_text(result)
+        await send_func("iwencai_query", {"query": query, "result": result, "text": text})
+        await send_reply(f"🔍 {text[:300]}", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_iwencai_select(payload: dict, send_func):
+    query = payload.get("query", "")
+    if not query:
+        await send_func("error", {"info": "请输入选股条件"})
+        return
+    try:
+        client = IwencaiClient()
+        result = await asyncio.to_thread(client.select_stocks, query)
+        text = format_iwencai_to_text(result)
+        await send_func("iwencai_select", {"query": query, "result": result, "text": text})
+        await send_reply(f"🎯 {text[:300]}", "happy" if result.get("ok") else "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_iwencai_search(payload: dict, send_func):
+    keyword = payload.get("keyword", "")
+    channel = payload.get("channel", "news")
+    if not keyword:
+        await send_func("error", {"info": "请输入搜索关键词"})
+        return
+    try:
+        client = IwencaiClient()
+        result = await asyncio.to_thread(client.search, keyword, channel=channel)
+        text = format_iwencai_to_text(result)
+        await send_func("iwencai_search", {"keyword": keyword, "channel": channel, "result": result, "text": text})
+        await send_reply(f"📰 {text[:300]}", "neutral", send_func)
     except Exception as e:
         await send_func("error", {"info": _safe_error(e)})

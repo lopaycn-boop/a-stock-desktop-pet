@@ -710,6 +710,18 @@ case 'billing_renewal_payment': {
         setMessages(prev => [...prev, { type: 'system', content: `🔥 热点板块: ${typeof hotspotData === 'string' ? hotspotData.substring(0, 200) : '已获取'}` }]);
         break;
       }
+      case 'iwencai_query':
+      case 'iwencai_select': {
+        const iwencaiText = payload?.text || payload?.result?.text || '暂无数据';
+        setMessages(prev => [...prev, { type: 'system', content: `🔍 ${iwencaiText.substring(0, 300)}` }]);
+        break;
+      }
+      case 'iwencai_search': {
+        const searchResults = payload?.result?.data || [];
+        const searchCount = searchResults.length;
+        setMessages(prev => [...prev, { type: 'system', content: `📰 搜索结果: ${searchCount}条${searchCount > 0 ? '资讯' : ''}` }]);
+        break;
+      }
       default:
         break;
     }
