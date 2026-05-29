@@ -2,6 +2,8 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import Live2DController from '../components/Live2D/Live2DController';
 import LoadingDots from '../components/LoadingDots';
 import ModelPicker from '../components/ModelPicker';
+import BillingPanel from '../components/BillingPanel';
+import RenewalPanel from '../components/RenewalPanel';
 import '../App.css';
 
 import { useAudioQueue } from '../hooks/useAudioQueue';
@@ -94,6 +96,10 @@ export default function MainPage() {
   const [renewalProviders, setRenewalProviders] = useState([]);
   const [currentModel, setCurrentModel] = useState(getSavedModelId);
   const [bytebotTaskId, setBytebotTaskId] = useState(null);
+  const [billingPanelData, setBillingPanelData] = useState(null);
+  const [renewalPanelData, setRenewalPanelData] = useState(null);
+  const [showBillingPanel, setShowBillingPanel] = useState(false);
+  const [showRenewalPanel, setShowRenewalPanel] = useState(false);
   const messagesEndRef = useRef(null);
   const live2dRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -503,12 +509,17 @@ export default function MainPage() {
       }
       case 'billing_dashboard': {
         const bd = payload || {};
-        setMessages(prev => [...prev, { type: 'system', content: bd.summary_text || '计费面板加载完成' }]);
+        setBillingPanelData(bd);
+        setShowBillingPanel(true);
+        setMessages(prev => [...prev, { type: 'system', content: bd.summary_text || '计费面板已打开' }]);
         break;
       }
       case 'billing_topup': {
         const bt = payload || {};
         setMessages(prev => [...prev, { type: 'system', content: bt.message || '充值完成' }]);
+        if (billingPanelData) {
+          setBillingPanelData(prev => ({ ...prev, wallet: bt.wallet || prev.wallet }));
+        }
         break;
       }
       case 'billing_usage': {
@@ -530,9 +541,19 @@ case 'billing_renewal_payment': {
         } else {
           rpMsg = '续费信息加载中...';
         }
+        setRenewalPanelData(rp);
+        setShowRenewalPanel(true);
         setMessages(prev => [...prev, { type: 'system', content: rpMsg }]);
-        if (rp.qr_code) {
-          setMessages(prev => [...prev, { type: 'image', content: rp.qr_code, alt: 'USDT-TRC20 收款二维码' }]);
+        break;
+      }
+      case 'billing_confirm_payment': {
+        const cp = payload || {};
+        const cpMsg = cp.auto_renewed
+          ? `✅ 付款确认，自动续费成功！余额: ¥${cp.wallet?.remaining_cny || '0'}`
+          : `💰 付款已记录！余额: ¥${cp.wallet?.remaining_cny || '0'}`;
+        setMessages(prev => [...prev, { type: 'system', content: cpMsg }]);
+        if (showRenewalPanel) {
+          setShowRenewalPanel(false);
         }
         break;
       }
@@ -865,26 +886,7 @@ case 'billing_renewal_payment': {
                     </button>
                   ))}
                 </div>
-              )}
-            </div>
-          ))}
-          {actionSteps.map((group, gi) => (
-            <div key={group.id} className={`action-group ${group.done ? 'action-group-done' : ''}`}>
-              <div className="action-group-title">
-                {group.done ? '✅ 执行完毕' : '⚡ 执行中...'}
-              </div>
-              {(group.steps || []).map((step, si) => (
-                <div key={si} className={`action-step action-step-${step.status}`}>
-                  <span className="step-icon">
-                    {step.status === 'running' ? '⏳' :
-                     step.status === 'done' ? '✅' :
-                     step.status === 'error' ? '❌' :
-                     step.status === 'blocked' ? '🚫' : '⏸️'}
-                  </span>
-                  <span className="step-label">{step.label}</span>
-                  {step.detail && <span className="step-detail">{step.detail}</span>}
-                </div>
-              ))}
+)}
             </div>
           ))}
           <div ref={messagesEndRef} />
@@ -927,6 +929,17 @@ case 'billing_renewal_payment': {
           </div>
         )}
       </div>
+      {showBillingPanel && <BillingPanel
+        data={billingPanelData}
+        onClose={() => setShowBillingPanel(false)}
+        onRenew={() => { setShowBillingPanel(false); sendPacket({ type: 'billing_renewal_payment', payload: {} }); }}
+        onTopup={(amount) => { sendPacket({ type: 'billing_topup', payload: { amount } }); }}
+      />}
+      {showRenewalPanel && <RenewalPanel
+        data={renewalPanelData}
+        onClose={() => setShowRenewalPanel(false)}
+        onConfirmPayment={() => { sendPacket({ type: 'billing_confirm_payment', payload: { amount: 72.5 } }); }}
+      />}
     </div>
   );
 }
