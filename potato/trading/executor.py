@@ -110,8 +110,9 @@ class TradeExecutor:
             amount_cny=trade.amount_cny,
             confidence=trade.confidence,
             reasoning=trade.reasoning,
+            stop_loss_price=Decimal(str(trade.stop_loss)) if trade.stop_loss else Decimal("0"),
         )
-        verdict = self.risk_validator.validate_trade(req, self._risk_state)
+        verdict = self.risk_validator.validate_trade(req, self._risk_state, open_positions=self.journal.get_open_positions_summary())
 
         if not verdict.allowed:
             await self._emit_step("risk_check", "blocked", f"风控拦截: {verdict.reason}")
@@ -202,18 +203,44 @@ class TradeExecutor:
         logger.info("Trade executed: %s %s ¥%s (confidence=%.2f)",
                      trade.action, trade.symbol, trade.amount_cny, float(trade.confidence))
 
-        self.journal.record_entry(
-            symbol=trade.symbol,
-            name=trade.name,
-            direction=trade.action,
-            price=trade.price,
-            quantity=trade.quantity,
-            amount_cny=trade.amount_cny,
-            target_price=trade.target_price,
-            stop_loss_price=trade.stop_loss,
-            confidence=trade.confidence,
-            thesis=trade.reasoning,
-        )
+        if trade.action == "BUY":
+            self.journal.record_entry(
+                symbol=trade.symbol,
+                name=trade.name,
+                direction="BUY",
+                price=trade.price,
+                quantity=trade.quantity,
+                amount_cny=trade.amount_cny,
+                target_price=trade.target_price,
+                stop_loss_price=trade.stop_loss,
+                confidence=trade.confidence,
+                thesis=trade.reasoning,
+            )
+        elif trade.action == "SELL":
+            open_pos = None
+            for tid, pos in list(self.journal._open_positions.items()):
+                if pos.symbol == trade.symbol:
+                    open_pos = pos
+                    break
+            if open_pos:
+                self.journal.record_exit(
+                    trade_id=open_pos.id,
+                    exit_price=trade.price,
+                    exit_reason="auto_sell",
+                )
+            else:
+                self.journal.record_entry(
+                    symbol=trade.symbol,
+                    name=trade.name,
+                    direction="BUY",
+                    price=trade.price,
+                    quantity=trade.quantity,
+                    amount_cny=trade.amount_cny,
+                    target_price=trade.target_price,
+                    stop_loss_price=trade.stop_loss,
+                    confidence=trade.confidence,
+                    thesis=trade.reasoning,
+                )
 
         self._risk_state.consecutive_losses = self.journal.get_consecutive_losses()
 

@@ -151,6 +151,9 @@ function _spawnAgent() {
   agentProc.on('close', (code) => {
     if (!isQuitting) {
       console.log(`Bytebot Agent exited with code ${code}, restarting in 5s...`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('system-event', { type: 'agent_crash', code });
+      }
       setTimeout(() => _spawnAgent(), 5000);
     }
   });
@@ -199,6 +202,9 @@ function _spawnBackend() {
   backendProc.on('close', (code) => {
     if (!isQuitting) {
       console.log(`Backend exited with code ${code}, restarting in 3s...`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('system-event', { type: 'backend_crash', code });
+      }
       setTimeout(() => _spawnBackend(), 3000);
     }
   });
@@ -224,8 +230,6 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
-      webSecurity: false,
-      allowRunningInsecureContent: true,
       autoplayPolicy: 'no-user-gesture-required',
     },
   });
@@ -313,16 +317,38 @@ function setAutoStart(enable = true) {
   }
 }
 
-// ── IPC handlers for full system control ──
+// ── IPC handlers for system control (allowlisted commands only) ──
+const ALLOWED_COMMANDS = {
+  cleanmgr: { args: ['/d', 'C'] },
+  taskkill: null,
+  systeminfo: null,
+  ping: null,
+  python: null,
+};
+
+function isCommandAllowed(cmd) {
+  const base = path.basename(cmd.toLowerCase().replace(/\.exe$/i, ''));
+  return base in ALLOWED_COMMANDS;
+}
+
 function setupIPC() {
   // System control — the pet can do EVERYTHING on the computer
   ipcMain.handle('shell-open', async (event, url) => {
+    if (typeof url !== 'string' || !url.match(/^https?:\/\//)) {
+      return { ok: false, error: 'Only HTTP(S) URLs allowed' };
+    }
     shell.openExternal(url);
     return { ok: true };
   });
 
   ipcMain.handle('shell-open-path', async (event, filePath) => {
-    shell.openPath(filePath);
+    const resolved = path.resolve(filePath);
+    const safeDirs = [process.resourcesPath, path.join(process.resourcesPath, '..')];
+    const isSafe = safeDirs.some(d => resolved.startsWith(d));
+    if (!isSafe) {
+      return { ok: false, error: 'Path outside allowed directories' };
+    }
+    shell.openPath(resolved);
     return { ok: true };
   });
 
@@ -338,8 +364,11 @@ function setupIPC() {
   });
 
   ipcMain.handle('execute-command', async (event, cmd, args = []) => {
+    if (!isCommandAllowed(cmd)) {
+      return { ok: false, error: `Command not allowlisted: ${cmd}` };
+    }
     return new Promise((resolve) => {
-      const proc = spawn(cmd, args, { shell: true, stdio: 'pipe' });
+      const proc = spawn(cmd, Array.isArray(args) ? args : [], { shell: false, stdio: 'pipe' });
       let stdout = '', stderr = '';
       proc.stdout.on('data', (d) => stdout += d.toString());
       proc.stderr.on('data', (d) => stderr += d.toString());
@@ -436,6 +465,9 @@ app.whenReady().then(async () => {
   const backendReady = await waitForBackend(BACKEND_PORT, 30);
   if (!backendReady) {
     console.error('Backend failed to start within 30s');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system-event', { type: 'backend_timeout' });
+    }
   }
 
   // Start Bytebot Agent

@@ -174,6 +174,16 @@ class TradeJournal:
     def _load(self):
         JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
         trades_file = JOURNAL_DIR / "trades.json"
+        tmp_file = JOURNAL_DIR / "trades.json.tmp"
+
+        # Crash recovery: if tmp exists and trades.json doesn't, recover from tmp
+        if tmp_file.exists() and not trades_file.exists():
+            logger.warning("Found trades.json.tmp without trades.json — recovering from backup")
+            try:
+                tmp_file.replace(trades_file)
+            except Exception as e:
+                logger.error("Failed to recover journal from tmp: %s", e)
+
         if trades_file.exists():
             try:
                 data = json.loads(trades_file.read_text(encoding="utf-8"))
@@ -251,7 +261,13 @@ class TradeJournal:
         )
         self._trades[trade_id] = rec
         self._open_positions[trade_id] = rec
-        self._save()
+        try:
+            self._save()
+        except Exception:
+            logger.error("Journal save failed, rolling back entry: %s", trade_id)
+            del self._trades[trade_id]
+            del self._open_positions[trade_id]
+            raise
         logger.info("Journal entry: %s %s %s @ ¥%s (target=%s, stop=%s)",
                     direction, symbol, name, price, tp, sl)
         return rec
@@ -278,14 +294,9 @@ class TradeJournal:
         if rec.entry_price > 0 and rec.quantity > 0:
             entry_total = rec.entry_price * rec.quantity
             exit_total = exit_price * rec.quantity
-            if rec.direction == "SELL":
-                rec.realized_pnl = entry_total - exit_total
-            else:
-                rec.realized_pnl = exit_total - entry_total
+            rec.realized_pnl = exit_total - entry_total
             if entry_total > 0:
                 rec.realized_pnl_pct = (exit_total / entry_total - 1) * 100
-                if rec.direction == "SELL":
-                    rec.realized_pnl_pct = -rec.realized_pnl_pct
 
         try:
             et = datetime.fromisoformat(rec.entry_time)
@@ -295,16 +306,15 @@ class TradeJournal:
             pass
 
         if rec.target_price > 0:
-            if rec.direction == "SELL":
-                rec.target_hit = exit_price <= rec.target_price
-            else:
-                rec.target_hit = exit_price >= rec.target_price
+            rec.target_hit = exit_price >= rec.target_price
         if rec.stop_loss_price > 0:
-            if rec.direction == "SELL":
-                rec.stop_hit = exit_price >= rec.stop_loss_price
-            else:
-                rec.stop_hit = exit_price <= rec.stop_loss_price
+            rec.stop_hit = exit_price <= rec.stop_loss_price
         rec.prediction_correct = (rec.realized_pnl > 0) if rec.realized_pnl != 0 else None
+
+        old_pnl = self._running_pnl
+        old_peak = self._peak_pnl
+        old_dd = self._max_drawdown_pct
+        old_losses = self._consecutive_losses
 
         self._running_pnl += rec.realized_pnl
         if self._running_pnl > self._peak_pnl:
@@ -320,7 +330,21 @@ class TradeJournal:
             self._consecutive_losses = 0
 
         self._trades[trade_id] = rec
-        self._save()
+        try:
+            self._save()
+        except Exception:
+            logger.error("Journal save failed, rolling back exit: %s", trade_id)
+            del self._trades[trade_id]
+            self._open_positions[trade_id] = rec
+            rec.exit_time = ""
+            rec.exit_price = Decimal("0")
+            rec.realized_pnl = Decimal("0")
+            rec.realized_pnl_pct = Decimal("0")
+            self._running_pnl = old_pnl
+            self._peak_pnl = old_peak
+            self._max_drawdown_pct = old_dd
+            self._consecutive_losses = old_losses
+            raise
         logger.info("Journal exit: %s @ ¥%s P&L=%s (%s)",
                     trade_id, exit_price, rec.realized_pnl, exit_reason)
         return rec
@@ -346,30 +370,16 @@ class TradeJournal:
             current = Decimal(str(quote["price"]))
             trigger = None
 
-            if pos.direction == "SELL":
-                if pos.stop_loss_price > 0 and current >= pos.stop_loss_price:
-                    trigger = "stop_loss"
-                elif pos.target_price > 0 and current <= pos.target_price:
-                    trigger = "take_profit"
-            else:
-                if pos.stop_loss_price > 0 and current <= pos.stop_loss_price:
-                    trigger = "stop_loss"
-                elif pos.target_price > 0 and current >= pos.target_price:
-                    trigger = "take_profit"
+            if pos.stop_loss_price > 0 and current <= pos.stop_loss_price:
+                trigger = "stop_loss"
+            elif pos.target_price > 0 and current >= pos.target_price:
+                trigger = "take_profit"
 
             if trigger:
-                if pos.direction == "SELL":
-                    pnl = (pos.entry_price - current) * pos.quantity
-                else:
-                    pnl = (current - pos.entry_price) * pos.quantity
+                pnl = (current - pos.entry_price) * pos.quantity
                 pnl_pct = ((current / pos.entry_price) - 1) * 100 if pos.entry_price > 0 else Decimal("0")
-                if pos.direction == "SELL":
-                    pnl_pct = -pnl_pct
-                    dist_stop = ((pos.stop_loss_price - current) / pos.entry_price * 100) if pos.stop_loss_price > 0 and pos.entry_price > 0 else Decimal("0")
-                    dist_target = ((current - pos.target_price) / pos.entry_price * 100) if pos.target_price > 0 and pos.entry_price > 0 else Decimal("0")
-                else:
-                    dist_stop = ((current - pos.stop_loss_price) / pos.entry_price * 100) if pos.stop_loss_price > 0 and pos.entry_price > 0 else Decimal("0")
-                    dist_target = ((pos.target_price - current) / pos.entry_price * 100) if pos.target_price > 0 and pos.entry_price > 0 else Decimal("0")
+                dist_stop = ((current - pos.stop_loss_price) / pos.entry_price * 100) if pos.stop_loss_price > 0 and pos.entry_price > 0 else Decimal("0")
+                dist_target = ((pos.target_price - current) / pos.entry_price * 100) if pos.target_price > 0 and pos.entry_price > 0 else Decimal("0")
 
                 alerts.append({
                     "trade_id": pos.id,
@@ -401,18 +411,10 @@ class TradeJournal:
             except Exception:
                 current = pos.entry_price
 
-            if pos.direction == "SELL":
-                pnl = (pos.entry_price - current) * pos.quantity
-            else:
-                pnl = (current - pos.entry_price) * pos.quantity
+            pnl = (current - pos.entry_price) * pos.quantity
             pnl_pct = ((current / pos.entry_price) - 1) * 100 if pos.entry_price > 0 else Decimal("0")
-            if pos.direction == "SELL":
-                pnl_pct = -pnl_pct
-                dist_target = ((current - pos.target_price) / pos.entry_price * 100) if pos.target_price > 0 and pos.entry_price > 0 else Decimal("0")
-                dist_stop = ((pos.stop_loss_price - current) / pos.entry_price * 100) if pos.stop_loss_price > 0 and pos.entry_price > 0 else Decimal("0")
-            else:
-                dist_target = ((pos.target_price - current) / pos.entry_price * 100) if pos.target_price > 0 and pos.entry_price > 0 else Decimal("0")
-                dist_stop = ((current - pos.stop_loss_price) / pos.entry_price * 100) if pos.stop_loss_price > 0 and pos.entry_price > 0 else Decimal("0")
+            dist_target = ((pos.target_price - current) / pos.entry_price * 100) if pos.target_price > 0 and pos.entry_price > 0 else Decimal("0")
+            dist_stop = ((current - pos.stop_loss_price) / pos.entry_price * 100) if pos.stop_loss_price > 0 and pos.entry_price > 0 else Decimal("0")
 
             positions.append(PositionStatus(
                 symbol=pos.symbol,

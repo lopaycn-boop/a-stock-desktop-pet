@@ -16,7 +16,7 @@ const SECRET_PATTERNS = [
   { re: /(secret[a-z_]*[=:]\s*)["']?([a-zA-Z0-9\-_\.]{16,})["']?/gi, label: 'SECRET' },
   { re: /(password[a-z_]*[=:]\s*)["']?([^\s"']{6,})["']?/gi, label: 'PASSWORD' },
   { re: /(Bearer\s+)([a-zA-Z0-9\-_\.]{16,})/gi, label: 'BEARER' },
-  { re: /([a-zA-Z0-9+\/]{40,}={0,2})/g, label: 'BASE64_SECRET' },
+  { re: /([a-zA-Z0-9+\/]{48,}={1,2})(?=[\s\]|}]|$)/g, label: 'BASE64_SECRET' },
 ];
 
 function maskSecrets(text) {

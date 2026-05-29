@@ -27,14 +27,22 @@ echo [1/2] Starting backend...
 start /b python -m potato
 timeout /t 3 /nobreak >nul
 
-:: Wait for backend
+:: Wait for backend (max 60 retries = 60 seconds)
 echo Waiting for backend...
+set /a _retries=0
 :wait_backend
 curl -s http://127.0.0.1:8000/health >nul 2>&1
-if %errorlevel% neq 0 (
-    timeout /t 1 /nobreak >nul
-    goto :wait_backend
+if %errorlevel% equ 0 goto :backend_ready
+set /a _retries+=1
+if %_retries% geq 60 (
+    echo [ERROR] Backend failed to start within 60 seconds.
+    echo          Check logs above for Python errors.
+    pause
+    exit /b 1
 )
+timeout /t 1 /nobreak >nul
+goto :wait_backend
+:backend_ready
 echo [OK] Backend is ready on :8000
 
 :start_frontend
@@ -50,6 +58,12 @@ if not exist "desktop_pet\frontend\node_modules" (
     echo [2/2] Installing frontend dependencies...
     cd desktop_pet\frontend
     call npm install
+    if %errorlevel% neq 0 (
+        echo [ERROR] npm install failed. Check Node.js and network.
+        cd ..\..
+        pause
+        exit /b 1
+    )
     cd ..\..
 )
 

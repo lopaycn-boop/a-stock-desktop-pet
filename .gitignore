@@ -34,6 +34,10 @@ desktop_pet/frontend/resources/python/
 *.sqlite3
 data/
 
+# === User data (PII risk) ===
+memory_db/
+user_facts.json
+
 # === IDE ===
 .vscode/
 .idea/

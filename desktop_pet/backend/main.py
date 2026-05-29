@@ -517,6 +517,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
             msg_type = packet.get("type", "")
             payload = packet.get("payload", {})
+            if not isinstance(payload, dict):
+                payload = {}
 
             if msg_type == "text_input":
                 await handle_user_input(payload.get("text", ""), send_to_frontend)

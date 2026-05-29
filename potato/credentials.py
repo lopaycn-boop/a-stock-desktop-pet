@@ -2,14 +2,14 @@
 
 Two modes per platform:
   - AUTONOMOUS: user gave credentials (account/password/API key),
-    stored AES-256-GCM encrypted in DB → 小土豆 logs in + trades fully autonomously.
+    stored Fernet(AES-128-CBC+HMAC-SHA256) encrypted in DB → 小土豆 logs in + trades fully autonomously.
   - ASSISTED: no credentials stored → user logs in via desktop pet/browser,
     then 小土豆 takes over to operate on the logged-in session.
 
 The credential plugin is the single authority for deciding which mode a platform
 is in. browser_cycle reads it; the desktop pet reads it; the API exposes it.
 
-Security: values are encrypted at rest using AES-256-GCM via Fernet.
+Security: values are encrypted at rest using Fernet(AES-128-CBC+HMAC-SHA256).
   Key is derived from machine fingerprint + per-installation salt.
   Falls back to base64 encoding if cryptography package is unavailable (NOT secure).
   This is NOT the same as vault.py encoding — each module uses its own _encode/_decode
@@ -60,11 +60,11 @@ class CredentialsPlugin:
 
     Table: platform_credentials
       - platform_id (PK)
-      - encoded_fields (AES-256-GCM encrypted JSON blob)
+      - encoded_fields (Fernet-encrypted JSON blob)
       - autonomous (bool)
       - granted_at, last_used_at
 
-    Security: values are encrypted using AES-256-GCM via Fernet at rest.
+    Security: values are encrypted using Fernet(AES-128-CBC+HMAC-SHA256) at rest.
     Requires cryptography package for production use.
     """
 

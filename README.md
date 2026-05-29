@@ -18,7 +18,7 @@
 - 🔄 **4层 LLM 故障转移** — DeepSeek → SiliconFlow → Liner → OpenAI，额度用完自动切换
 - 🖥️ **Bytebot 远程操控** — 内置Bytebot Agent(9991) + Bytebot Desktop(9990)，语音指令操控电脑
 - 🛡️ **严格风控系统** — 止损必设、用户定金额、AI定止损止盈、熔断机制、仓位管理
-- 🔐 **密钥保险箱** — AES-256-GCM 加密存储，前端7层正则遮蔽，绝不泄漏密钥
+- 🔐 **密钥保险箱** — Fernet(AES-128-CBC+HMAC-SHA256) 加密存储，前端7层正则遮蔽，绝不泄漏密钥
 - 🎙️ **语音交互** — SiliconFlow TTS/STT，支持语音对话
 - 📱 **多渠道通知** — Telegram / 飞书 / 钉钉推送交易提醒
 - 🧠 **30天记忆** — 持久化记忆系统，记住用户偏好和对话
@@ -42,7 +42,7 @@
 │  │  └──────────┘ └──────────┘ └────────────────┘ │  │
 │  │  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │  │
 │  │  │密钥保险箱 │ │Bytebot   │ │   专业复盘      │ │  │
-│  │  │ AES-256   │ │Agent内置 │ │  胜率/盈亏比    │ │  │
+│  │  │ AES-128   │ │Agent内置 │ │  胜率/盈亏比    │ │  │
 │  │  └──────────┘ └──────────┘ └────────────────┘ │  │
 │  └────────────────────────────────────────────────┘  │
 │         │ SQLite (本地) / CockroachDB (云端)         │
@@ -177,7 +177,7 @@ python -m potato
 | 后端 | Python + FastAPI + WebSocket |
 | 大模型 | DeepSeek / SiliconFlow / Liner / OpenAI (4层故障转移) |
 | 数据库 | SQLite (本地) / CockroachDB (云端) |
-| 加密 | AES-256-GCM (cryptography) |
+| 加密 | Fernet(AES-128-CBC+HMAC-SHA256) (cryptography) |
 | 通知 | Telegram / 飞书 / 钉钉 |
 | 桌面操控 | Bytebot Agent(内置) / Bytebot Desktop(Docker) / Playwright / pyautogui |
 | 交易引擎 | 7 阶段调度器 + 12 条风控规则 + 专业复盘系统 |
@@ -208,7 +208,7 @@ a-stock-desktop-pet/
 │   │   └── risk.py        # 12 条风控规则
 │   ├── intel.py           # 资讯抓取 (Google News RSS)
 │   ├── llm.py             # 4 层 LLM 故障转移
-│   ├── vault.py            # AES-256-GCM 密钥保险箱
+│   ├── vault.py            # Fernet(AES-128-CBC+HMAC-SHA256) 密钥保险箱
 │   └── ...
 ├── schema/                # 数据库 Schema
 ├── .env.example           # 环境变量模板

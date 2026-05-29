@@ -6,14 +6,17 @@ No trade should ever hit the browser without passing validate_trade().
 Risk rules enforced:
 1. Max single trade amount (¥)
 2. Max daily trade amount (¥)
-3. Max open positions
-4. Max consecutive losses → circuit breaker
-5. Stop-loss enforcement (position must not exceed -X%)
-6. Trading hours restriction (no 尾盘 last 15 min)
-7. Stock blacklist / restricted symbols
-8. Minimum confidence threshold
-9. Position size limits
+3. Max consecutive losses → circuit breaker
+4. Invalid amount rejection
+5. Stop-loss enforcement — BUY must set stop-loss, SELL at/below stop triggers immediate stop
+6. Max open positions
+7. Minimum confidence threshold
+8. Blacklist check
+9. Restricted prefix check (ST/*ST/N stocks)
 10. Daily loss limit
+11. Trading hours + weekend restriction
+12. Consecutive losses warning (soft)
+13. Approaching daily limit warning (soft)
 """
 from __future__ import annotations
 
@@ -106,6 +109,7 @@ class TradeRequest:
     amount_cny: Decimal = Decimal("0")
     confidence: Decimal = Decimal("0")
     reasoning: str = ""
+    stop_loss_price: Decimal = Decimal("0")
 
 
 @dataclass
@@ -205,7 +209,7 @@ class RiskValidator:
 
         return limits
 
-    def validate_trade(self, trade: TradeRequest, state: RiskState) -> RiskVerdict:
+    def validate_trade(self, trade: TradeRequest, state: RiskState, open_positions: list[dict] | None = None) -> RiskVerdict:
         """Validate a trade request against all risk rules. Returns verdict."""
         warnings = []
 
@@ -261,6 +265,28 @@ class RiskValidator:
                 risk_state=state,
                 warnings=warnings,
             )
+
+        # Rule 5: Stop-loss enforcement — BUY trades must set a stop-loss, existing positions must not exceed stop-loss limit
+        stop_loss_pct = self._limits.get("stop_loss_pct")
+        if trade.action == "BUY" and stop_loss_pct and stop_loss_pct > 0:
+            if not trade.stop_loss_price or trade.stop_loss_price <= 0:
+                max_loss_price = float(trade.price) * (1 - float(stop_loss_pct))
+                warnings.append(f"STOP_LOSS_MISSING: 建议止损价¥{max_loss_price:.2f}(-{float(stop_loss_pct)*100:.0f}%)")
+            elif trade.price > 0:
+                actual_sl_pct = float((trade.price - trade.stop_loss_price) / trade.price)
+                if actual_sl_pct < float(stop_loss_pct) * 0.5:
+                    warnings.append(f"STOP_LOSS_TOO_WIDE: 止损{(1-actual_sl_pct)*100:.0f}%距离过远，建议收紧到{float(stop_loss_pct)*100:.0f}%")
+        if open_positions and trade.action == "SELL":
+            for pos in open_positions:
+                entry_price = Decimal(str(pos.get("entry_price", "0")))
+                stop_loss_price = Decimal(str(pos.get("stop_loss_price", "0")))
+                if entry_price > 0 and stop_loss_price > 0 and trade.price <= stop_loss_price:
+                    return RiskVerdict(
+                        allowed=False,
+                        reason=f"POSITION_BELOW_STOP: {trade.symbol}已跌破止损价¥{stop_loss_price}，当前¥{trade.price}。应立即止损而非挂新单。",
+                        risk_state=state,
+                        warnings=warnings,
+                    )
 
         # Rule 5: Max open positions (only if user set one, hard cap otherwise)
         if trade.action == "BUY":

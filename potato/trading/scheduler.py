@@ -119,17 +119,37 @@ class TradingScheduler:
                 break
 
         if phase == "pre_market":
-            await self._phase_pre_market()
+            try:
+                await self._phase_pre_market()
+            except Exception as e:
+                logger.error("Phase pre_market error: %s", e)
+                await self._emit("chat", {"text": f"⚠️ 盘前分析异常: {e}", "emotion": "worried"})
         elif phase == "risk_confirm":
-            await self._phase_risk_confirm()
+            try:
+                await self._phase_risk_confirm()
+            except Exception as e:
+                logger.error("Phase risk_confirm error: %s", e)
         elif phase == "open_analysis":
-            await self._phase_open_analysis()
+            try:
+                await self._phase_open_analysis()
+            except Exception as e:
+                logger.error("Phase open_analysis error: %s", e)
+                await self._emit("chat", {"text": f"⚠️ 开盘分析异常: {e}", "emotion": "worried"})
         elif phase == "mid_review":
-            await self._phase_mid_review()
+            try:
+                await self._phase_mid_review()
+            except Exception as e:
+                logger.error("Phase mid_review error: %s", e)
         elif phase == "pre_close":
-            await self._phase_pre_close()
+            try:
+                await self._phase_pre_close()
+            except Exception as e:
+                logger.error("Phase pre_close error: %s", e)
         elif phase == "post_market":
-            await self._phase_post_market()
+            try:
+                await self._phase_post_market()
+            except Exception as e:
+                logger.error("Phase post_market error: %s", e)
 
     async def run_manual_analysis(
         self,
@@ -280,7 +300,7 @@ class TradingScheduler:
             buy_signals = [p for p in picks if p.get("action") == "BUY" and p.get("confidence", 0) >= 0.65]
             summary += f"，{len(buy_signals)}只买入信号"
 
-        await self.send_func("chat", {
+        await self._emit("chat", {
             "text": f"🌅 盘前扫描完成\n分析了{len(symbols)}只自选股 + {len(news_items or [])}条资讯\n"
                     + (f"发现{len([p for p in picks if p.get('action') in ('BUY','SELL')])}个操作信号" if picks else "暂无明确信号"),
             "expression": "happy" if picks else "neutral",
@@ -325,7 +345,7 @@ class TradingScheduler:
 
         if result.get("ok") and picks:
             formatted = format_trade_decision_for_pet(result)
-            await self.send_func("chat", {
+            await self._emit("chat", {
                 "text": f"📊 开盘分析完成\n\n{formatted}",
                 "expression": "happy",
             })
@@ -352,7 +372,7 @@ class TradingScheduler:
                 for pick in picks:
                     if pick.get("action") in ("BUY", "SELL") and pick.get("confidence", 0) >= 0.65:
                         trade_result = await self.execute_trade_decision(pick, user_prefs=all_prefs)
-                        await self.send_func("trade_result", {
+                        await self._emit("trade_result", {
                             "ok": trade_result.get("ok", False),
                             "action": trade_result.get("action", pick.get("action")),
                             "symbol": trade_result.get("symbol", pick.get("symbol")),
@@ -362,7 +382,7 @@ class TradingScheduler:
                         })
         else:
             error_msg = result.get("error", "分析未返回结果") if not result.get("ok") else "无选股信号"
-            await self.send_func("chat", {
+            await self._emit("chat", {
                 "text": f"📊 开盘分析: {error_msg}",
                 "expression": "neutral",
             })
@@ -393,7 +413,7 @@ class TradingScheduler:
             "max_open_positions": 3,
             "stop_loss_pct": 0.05,
             "take_profit_pct": 0.10,
-            "risk_confirmed": True,
+            "risk_confirmed": False,
         }
 
         # Check if user has ever set capital amounts
@@ -445,7 +465,7 @@ class TradingScheduler:
 
         positions = self.journal.get_open_positions_summary()
         if not positions:
-            await self.send_func("chat", {
+            await self._emit("chat", {
                 "text": "📊 午间复盘：当前无持仓，继续观望",
                 "expression": "neutral",
             })
@@ -480,7 +500,7 @@ class TradingScheduler:
             summary += f"\n\n⚠️ 触发信号：\n" + "\n".join(alert_lines)
             summary += "\n\nAI正在自动处理触发信号..."
 
-        await self.send_func("chat", {
+        await self._emit("chat", {
             "text": summary,
             "expression": "thinking" if alerts else "happy",
         })
@@ -510,7 +530,7 @@ class TradingScheduler:
                     "confidence": 0.95,
                     "reasoning": f"止损触发：当前价¥{a.get('current_price')}已跌破止损价¥{a.get('stop_loss_price')}",
                 }, user_prefs=all_prefs)
-                await self.send_func("trade_result", {
+                await self._emit("trade_result", {
                     "ok": trade_result.get("ok", False),
                     "action": "SELL",
                     "symbol": a.get("symbol", ""),
@@ -528,7 +548,7 @@ class TradingScheduler:
                     "confidence": 0.9,
                     "reasoning": f"止盈触发：当前价¥{a.get('current_price')}已达目标价¥{a.get('target_price')}",
                 }, user_prefs=all_prefs)
-                await self.send_func("trade_result", {
+                await self._emit("trade_result", {
                     "ok": trade_result.get("ok", False),
                     "action": "SELL",
                     "symbol": a.get("symbol", ""),
@@ -543,7 +563,7 @@ class TradingScheduler:
         await self._emit_step("pre_close", "running", "尾盘评估中...")
         positions = self.journal.get_open_positions_summary()
         if not positions:
-            await self.send_func("chat", {
+            await self._emit("chat", {
                 "text": "📊 尾盘评估：当前无持仓，全天观望",
                 "expression": "neutral",
             })
@@ -613,7 +633,7 @@ class TradingScheduler:
             summary_lines.append(f"继续持有{len(remaining)}只过夜")
 
         summary = "\n".join(summary_lines)
-        await self.send_func("chat", {
+        await self._emit("chat", {
             "text": summary,
             "expression": "thinking" if executed_trades else "happy",
         })
@@ -663,7 +683,7 @@ class TradingScheduler:
             for pos in positions:
                 summary += f"\n  {pos['name']}({pos['symbol']}) 入场¥{pos['entry_price']} 目标¥{pos['target_price']} 止损¥{pos['stop_loss_price']}"
 
-        await self.send_func("chat", {
+        await self._emit("chat", {
             "text": summary,
             "expression": "happy" if review.total_pnl and float(review.total_pnl) >= 0 else "sad",
         })

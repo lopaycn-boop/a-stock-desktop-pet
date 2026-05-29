@@ -3,9 +3,9 @@
 用户通过桌宠给密钥，小土豆存入数据库，拿到密钥就能操作对应平台。
 
 存储层：SQLite (本地) / CockroachDB (云端)，与现有 DB 共用。
-安全：密钥存储时 AES-256-GCM 加密，读取时自动解密。
+安全：密钥存储时 Fernet(AES-128-CBC + HMAC-SHA256) 加密，读取时自动解密。
   加密密钥派生自机器指纹 + 用户密钥盐，每台机器不同。
-  无明文存储，无 base64 伪加密。
+  无明文存储，解密失败直接报错不回退明文。
 分类：platform_credentials / api_keys / bot_tokens / user_secrets
 
 用法：
@@ -78,7 +78,11 @@ def _get_vault_key() -> bytes:
 
     env_key = os.getenv("VAULT_ENCRYPTION_KEY", "").strip()
     if env_key:
-        return hashlib.pbkdf2_hmac("sha256", env_key.encode(), os.environ.get("VAULT_SALT", "vault-stable-salt-CHANGE-ME-IN-PRODUCTION").encode(), 200_000)
+        salt_val = os.environ.get("VAULT_SALT", "").strip()
+        if not salt_val:
+            logger.warning("VAULT_ENCRYPTION_KEY set but VAULT_SALT not set — using insecure default salt. Set VAULT_SALT for production.")
+            salt_val = "vault-stable-salt-CHANGE-ME-IN-PRODUCTION"
+        return hashlib.pbkdf2_hmac("sha256", env_key.encode(), salt_val.encode(), 200_000)
 
     salt_path = Path(__file__).resolve().parents[1] / "data" / ".vault_salt"
     if salt_path.exists():
@@ -129,17 +133,21 @@ def _encrypt(value: str) -> str:
 
 
 def _decrypt(encoded: str) -> str:
-    """Decrypt a value. Tries Fernet first, falls back to base64 for legacy data migration."""
+    """Decrypt a value. Tries Fernet first, falls back to base64 for legacy data migration.
+    Raises RuntimeError if both fail — never returns the raw encoded string as plaintext."""
     cipher = _get_cipher()
     if cipher is not None:
         try:
             return cipher.decrypt(encoded.encode("ascii")).decode("utf-8")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Fernet decryption failed, trying base64: %s", exc)
     try:
         return base64.b64decode(encoded.encode("ascii")).decode("utf-8")
-    except Exception:
-        return encoded
+    except Exception as exc:
+        raise RuntimeError(
+            f"Vault decryption failed: value is neither Fernet-encrypted nor valid base64. "
+            f"Data may be corrupted or encrypted with a different key. Error: {exc}"
+        ) from exc
 
 
 class Vault:

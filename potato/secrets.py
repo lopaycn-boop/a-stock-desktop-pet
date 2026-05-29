@@ -1,6 +1,6 @@
 """Secrets store — unified credential management for CockroachDB and SQLite.
 
-Security: All secrets are AES-256-GCM encrypted at rest.
+Security: All secrets are Fernet(AES-128-CBC+HMAC-SHA256) encrypted at rest.
   - CockroachDB: values encrypted before storage, decrypted on read
   - SQLite fallback: uses vault table which now stores encrypted values
   - Machine-specific key derivation ensures secrets aren't portable across installs
@@ -66,7 +66,7 @@ BOOTSTRAP_ENV_KEYS = (
 class SecretStore:
     """Read/write unified credentials in CockroachDB app_secrets table.
 
-    All values are AES-256-GCM encrypted before storage and decrypted on read.
+    All values are Fernet(AES-128-CBC+HMAC-SHA256) encrypted before storage and decrypted on read.
     """
 
     def __init__(self, bootstrap: BootstrapSettings | None = None):
@@ -217,7 +217,7 @@ def secrets_env_fallback_enabled() -> bool:
 
 
 def _load_vault_secrets() -> dict[str, str]:
-    """Load secrets from SQLite vault table (AES-256-GCM decrypted)."""
+    """Load secrets from SQLite vault table (Fernet(AES-128-CBC+HMAC-SHA256) decrypted)."""
     import sqlite3
     from pathlib import Path
 
