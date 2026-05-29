@@ -223,6 +223,20 @@ def test_platform_wallet_vault_key():
     assert KNOWN_KEYS["PLATFORM_WALLET_ADDRESS"].get("renewal_only") is True
 
 
+def test_generate_payment_qr():
+    manager = BillingManager()
+    qr_b64 = manager.generate_payment_qr(amount_cny=72.5)
+    assert qr_b64.startswith("data:image/png;base64,")
+    assert len(qr_b64) > 100
+
+
+def test_generate_payment_qr_no_amount():
+    manager = BillingManager()
+    qr_b64 = manager.generate_payment_qr()
+    assert qr_b64.startswith("data:image/png;base64,")
+    assert "tron:" in DEFAULT_PLATFORM_WALLET or len(qr_b64) > 100
+
+
 def test_wallet_address_persisted_on_init():
     import sqlite3
     from potato.billing import DB_PATH, DEFAULT_PLATFORM_WALLET

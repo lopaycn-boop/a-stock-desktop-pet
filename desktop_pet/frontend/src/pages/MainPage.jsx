@@ -526,10 +526,22 @@ case 'billing_renewal_payment': {
         } else if (rp.wallet_address) {
           rpMsg = `💳 续费支付\n收款: ${rp.wallet_address} (${rp.wallet_label || 'USDT-TRC20'})\n余额: ¥${rp.current_balance_cny}\n${rpItems ? '待续费:\n' + rpItems : ''}\n合计: ¥${rp.total_renewal_cny}`;
           if (rp.payment_note) rpMsg += `\n${rp.payment_note}`;
+          if (rp.qr_code) rpMsg += '\n\n📱 请扫描二维码支付';
         } else {
           rpMsg = '续费信息加载中...';
         }
         setMessages(prev => [...prev, { type: 'system', content: rpMsg }]);
+        if (rp.qr_code) {
+          setMessages(prev => [...prev, { type: 'image', content: rp.qr_code, alt: 'USDT-TRC20 收款二维码' }]);
+        }
+        break;
+      }
+      case 'billing_confirm_payment': {
+        const cp = payload || {};
+        const cpMsg = cp.auto_renewed
+          ? `✅ 付款确认，自动续费成功！余额: ¥${cp.wallet?.remaining_cny || '0'}`
+          : `💰 付款已记录！余额: ¥${cp.wallet?.remaining_cny || '0'}`;
+        setMessages(prev => [...prev, { type: 'system', content: cpMsg }]);
         break;
       }
       case 'credential_granted':

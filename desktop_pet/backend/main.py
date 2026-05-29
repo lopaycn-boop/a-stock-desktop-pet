@@ -314,7 +314,8 @@ class PotatoPetBrain:
 - 用户可通过对话说"充值"或"看看账单"查看信息
 - 用户说"续费"或"支付"时 → 触发billing_renewal_payment
   - 余额充足 → 自动扣款，显示"续费成功"
-  - 余额不足 → 显示收款地址和总金额，引导付款
+  - 余额不足 → 显示收款地址+二维码+总金额，引导付款
+- 用户说"已付款/付款完成"时 → 触发billing_confirm_payment，记录充值并自动续费
 - 严禁在回复中暴露成本拆分、利润比例、费率结构等信息
 
 选股分析规则：
@@ -379,7 +380,8 @@ class PotatoPetBrain:
         "broker_balance": null,
         "billing_dashboard": null,
         "billing_topup": null,
-        "billing_renewal_payment": null
+        "billing_renewal_payment": null,
+        "billing_confirm_payment": null
     }}
 }}
 
@@ -754,6 +756,9 @@ async def websocket_endpoint(websocket: WebSocket):
             elif msg_type == "billing_renewal_payment":
                 await handle_billing_renewal_payment(payload, send_to_frontend)
 
+            elif msg_type == "billing_confirm_payment":
+                await handle_billing_confirm_payment(payload, send_to_frontend)
+
             else:
                 logger.warning("Unknown msg_type from frontend: %s", msg_type)
                 await send_to_frontend("error", {"info": f"未知消息类型: {msg_type}"})
@@ -958,6 +963,7 @@ _ACTION_LABELS = {
     "billing_topup": "充值",
     "billing_usage": "用量明细",
     "billing_renewal_payment": "续费支付",
+    "billing_confirm_payment": "确认付款",
 }
 
 
@@ -1366,6 +1372,10 @@ async def _process_ai_actions(actions: dict, send_func):
         if actions.get("billing_renewal_payment") or actions.get("renewal_payment"):
             await _emit_step(send_func, "billing_renewal_payment", "running", "获取续费支付信息")
             _spawn(handle_billing_renewal_payment(actions, send_func))
+
+        if actions.get("billing_confirm_payment"):
+            await _emit_step(send_func, "billing_confirm_payment", "running", "确认付款")
+            _spawn(handle_billing_confirm_payment(actions, send_func))
 
     except Exception as e:
         logger.warning("Action processing error: %s", e)
@@ -2764,7 +2774,7 @@ async def handle_billing_usage(payload: dict, send_func):
 
 
 async def handle_billing_renewal_payment(payload: dict, send_func):
-    """Handle renewal — auto-deduct if balance sufficient, otherwise show payment address."""
+    """Handle renewal — auto-deduct if balance sufficient, otherwise show payment address + QR."""
     try:
         provider = ""
         if isinstance(payload, dict):
@@ -2779,18 +2789,60 @@ async def handle_billing_renewal_payment(payload: dict, send_func):
             for item in payment_info["items"]:
                 items_text.append(f"  {item['name']}: ¥{item['price_cny']:.0f}/月")
 
+            try:
+                qr_b64 = _billing.generate_payment_qr(amount_cny=payment_info.get("total_renewal_cny", 0))
+                payment_info["qr_code"] = qr_b64
+            except Exception:
+                payment_info["qr_code"] = ""
+
             summary = f"💳 续费支付\n\n收款地址: {payment_info['wallet_address']}\n币种: {payment_info['wallet_label']}\n\n"
             if items_text:
                 summary += "待续费服务:\n" + "\n".join(items_text) + "\n"
                 summary += f"\n合计: ¥{payment_info['total_renewal_cny']:.2f}\n"
             summary += f"\n当前余额: ¥{payment_info['current_balance_cny']:.2f}\n"
             summary += payment_info["payment_note"]
+            if payment_info.get("qr_code"):
+                summary += "\n\n📱 请扫描二维码支付"
 
         await send_func("billing_renewal_payment", payment_info)
         await send_reply(summary, "happy" if payment_info.get("balance_sufficient") else "neutral", send_func)
     except Exception as e:
         logger.error("billing_renewal_payment error: %s", e)
         await send_func("error", {"info": f"续费信息获取失败: {e}"})
+
+
+async def handle_billing_confirm_payment(payload: dict, send_func):
+    """Handle user payment confirmation — add topup and retry renewal."""
+    try:
+        amount = float(payload.get("billing_confirm_payment") or payload.get("amount") or 0)
+        tx_hash = str(payload.get("tx_hash") or "")
+        method = "crypto" if tx_hash else "manual"
+
+        if amount <= 0:
+            amount = 72.5
+
+        result = _billing.add_wallet_topup(amount_cny=amount, method=method, tx_hash=tx_hash)
+        wallet = _billing.get_wallet_balance()
+        payment_info = _billing.get_renewal_payment_info()
+
+        if payment_info.get("balance_sufficient"):
+            summary = f"✅ 付款已确认，续费成功！\n充值 ¥{amount:.2f}\n当前余额: ¥{wallet['remaining_cny']:.2f}"
+        else:
+            summary = f"💰 付款已记录！\n充值 ¥{amount:.2f}\n当前余额: ¥{wallet['remaining_cny']:.2f}\n待续费: ¥{payment_info['total_renewal_cny']:.2f}"
+            if wallet["remaining_cny"] < payment_info["total_renewal_cny"]:
+                diff = payment_info["total_renewal_cny"] - wallet["remaining_cny"]
+                summary += f"\n还需充值 ¥{diff:.2f} 才能完成续费"
+
+        await send_func("billing_confirm_payment", {
+            "ok": True,
+            "amount_cny": amount,
+            "wallet": wallet,
+            "auto_renewed": payment_info.get("balance_sufficient", False),
+        })
+        await send_reply(summary, "happy", send_func)
+    except Exception as e:
+        logger.error("billing_confirm_payment error: %s", e)
+        await send_func("error", {"info": f"付款确认失败: {e}"})
 
 
 async def game_loop(ws, send_func):

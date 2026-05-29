@@ -35,10 +35,14 @@ import json
 import logging
 import os
 import sqlite3
+import base64
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
+
+import qrcode
+from io import BytesIO
 
 logger = logging.getLogger("potato.billing")
 
@@ -462,3 +466,20 @@ class BillingManager:
                     (now, item["provider"], 0.0, item["price_cny"] / 2, item["price_cny"] / 2, item["price_cny"], "auto_deducted", ""),
                 )
         logger.info("Auto-renewal deducted for %s providers", len(items))
+
+    def generate_payment_qr(self, amount_cny: float = 0.0) -> str:
+        """Generate QR code as base64 PNG for the platform wallet address.
+
+        Returns a data URI that can be directly embedded in <img> src.
+        Only called during renewal flow — never in idle context.
+        """
+        wallet_addr = self._get_platform_wallet()
+        qr_data = f"tron:{wallet_addr}"
+        if amount_cny > 0:
+            qr_data += f"?amount={amount_cny}&token=USDT-TRC20"
+
+        img = qrcode.make(qr_data)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{b64}"
