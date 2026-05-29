@@ -92,6 +92,127 @@ PROVIDERS = [
 
 TASK_TYPES = {"chat", "analysis", "research", "fallback"}
 
+# ── Demo mode — smart simulated responses when no API keys available ─────
+
+_DEMO_STOCKS = [
+    {"code": "600519", "name": "贵州茅台", "price": 1523.50, "change": "+0.82%", "pe": 28.3},
+    {"code": "000858", "name": "五粮液", "price": 148.60, "change": "+1.15%", "pe": 22.1},
+    {"code": "601318", "name": "中国平安", "price": 48.30, "change": "-0.41%", "pe": 9.8},
+    {"code": "300750", "name": "宁德时代", "price": 218.50, "change": "+2.34%", "pe": 35.6},
+    {"code": "002594", "name": "比亚迪", "price": 267.80, "change": "+1.56%", "pe": 30.2},
+]
+
+_DEMO_ANALYSES = [
+    {"stock": "600519", "name": "贵州茅台", "action": "HOLD", "confidence": 72,
+     "reason": "消费龙头估值合理，短期震荡但中长期确定性高。建议持有等待突破。"},
+    {"stock": "300750", "name": "宁德时代", "action": "WATCH", "confidence": 65,
+     "reason": "新能源景气度回升，但估值偏高，建议观望回调后介入。"},
+    {"stock": "601318", "name": "中国平安", "action": "BUY", "confidence": 58,
+     "reason": "保险板块估值低位，金融政策利好，稳健型可轻仓试探。"},
+]
+
+_DEMO_HOT_TOPICS = [
+    "新能源板块连续走强，宁德时代、比亚迪领涨",
+    "央行定向降准0.25个百分点，释放长期资金约5000亿",
+    "消费复苏主线：白酒板块资金持续流入",
+    "AI概念股分化，龙头调整但长期逻辑不变",
+    "北向资金今日净流入58亿元，重点加仓消费和金融",
+]
+
+_DEMO_SENTIMENTS = [
+    {"overall": "偏多", "score": 65, "detail": "市场情绪偏暖，北向资金持续流入，消费和新能源领涨。建议稳健持股。"},
+    {"overall": "中性偏多", "score": 58, "detail": "政策面偏暖但量能不足，建议控制仓位，关注结构性机会。"},
+    {"overall": "谨慎乐观", "score": 55, "detail": "短期有支撑但上方压力明显，建议半仓操作，快进快出。"},
+]
+
+_DEMO_REPLIES = [
+    "我正在离线演示模式~ 粘贴你的DeepSeek API Key就可以获得真实AI分析哦！",
+    "演示模式中~ 我现在用的是模拟数据。配置API Key后可以解锁真实市场分析！",
+    "嗨~ 这是演示模式回复。真实AI分析只需粘贴一个API Key就能开启！",
+    "我在这里！不过现在用的是模拟数据哦。给我一个API Key，我就能认真分析了~",
+]
+
+
+def _demo_response(user_prompt: str, task: str = "fallback", use_json: bool = True) -> dict[str, Any]:
+    """Generate a smart demo response when no LLM providers are available."""
+    import random
+    prompt_lower = user_prompt.lower() if user_prompt else ""
+
+    if use_json and task in ("analysis", "fallback"):
+        if any(kw in prompt_lower for kw in ["分析", "选股", "推荐", "买", "卖", "持仓", "操盘"]):
+            stock = random.choice(_DEMO_ANALYSES)
+            return {
+                "ok": True, "demo": True, "provider": "demo", "model": "demo-mode",
+                "content": json.dumps({
+                    "reply": f"📊 **{stock['name']}（{stock['stock']}）**\n\n"
+                             f"操作建议：{stock['action']}（置信度{stock['confidence']}%）\n"
+                             f"分析：{stock['reason']}\n\n"
+                             f"⚠️ 这是演示模式分析，配置API Key后可获得实时真实分析",
+                    "emotion": "happy",
+                    "actions": {},
+                    "memory_operation": {},
+                }, ensure_ascii=False),
+                "tokens_in": 0, "tokens_out": 0, "task": task,
+            }
+        if any(kw in prompt_lower for kw in ["行情", "大盘", "指数", "涨跌", "市场"]):
+            stocks_summary = "\n".join(f"  {s['name']}（{s['code']}）{s['price']}元 {s['change']}" for s in _DEMO_STOCKS[:3])
+            return {
+                "ok": True, "demo": True, "provider": "demo", "model": "demo-mode",
+                "content": json.dumps({
+                    "reply": f"📈 今日A股模拟行情（演示模式）：\n{stocks_summary}\n\n"
+                             f"⚠️ 这是模拟数据，配置API Key后可获得实时行情分析",
+                    "emotion": "neutral",
+                    "actions": {},
+                    "memory_operation": {},
+                }, ensure_ascii=False),
+                "tokens_in": 0, "tokens_out": 0, "task": task,
+            }
+        if any(kw in prompt_lower for kw in ["热点", "板块", "概念", "题材"]):
+            topic = random.choice(_DEMO_HOT_TOPICS)
+            return {
+                "ok": True, "demo": True, "provider": "demo", "model": "demo-mode",
+                "content": json.dumps({
+                    "reply": f"🔥 热点速递（演示模式）：\n\n{topic}\n\n"
+                             f"⚠️ 配置API Key后可获得实时热点追踪",
+                    "emotion": "happy",
+                    "actions": {},
+                    "memory_operation": {},
+                }, ensure_ascii=False),
+                "tokens_in": 0, "tokens_out": 0, "task": task,
+            }
+
+    if task == "research" or any(kw in prompt_lower for kw in ["研报", "新闻", "资讯", "搜索"]):
+        topic = random.choice(_DEMO_HOT_TOPICS)
+        return {
+            "ok": True, "demo": True, "provider": "demo", "model": "demo-mode",
+            "content": f"📰 研究摘要（演示模式）：\n\n{topic}\n\n"
+                       f"⚠️ 这是模拟结果，配置API Key后可获得真实AI研究分析",
+            "tokens_in": 0, "tokens_out": 0, "task": task,
+        }
+
+    if any(kw in prompt_lower for kw in ["情绪", "恐慌", "贪婪", "feeling"]):
+        sent = random.choice(_DEMO_SENTIMENTS)
+        return {
+            "ok": True, "demo": True, "provider": "demo", "model": "demo-mode",
+            "content": f"🌡️ 市场情绪（演示模式）：{sent['overall']}（{sent['score']}/100）\n{sent['detail']}\n\n"
+                       f"⚠️ 配置API Key后可获得真实情绪分析",
+            "tokens_in": 0, "tokens_out": 0, "task": task,
+        }
+
+    reply = random.choice(_DEMO_REPLIES)
+    if use_json:
+        return {
+            "ok": True, "demo": True, "provider": "demo", "model": "demo-mode",
+            "content": json.dumps({
+                "reply": reply, "emotion": "neutral", "actions": {}, "memory_operation": {},
+            }, ensure_ascii=False),
+            "tokens_in": 0, "tokens_out": 0, "task": task,
+        }
+    return {
+        "ok": True, "demo": True, "provider": "demo", "model": "demo-mode",
+        "content": reply, "tokens_in": 0, "tokens_out": 0, "task": task,
+    }
+
 # ── Health tracking ────────────────────────────────────────────────────
 
 _provider_health: dict[str, dict[str, Any]] = {
@@ -264,7 +385,8 @@ def chat(
             if _get_key(settings, p["key_env"]):
                 providers.append(p)
         if not providers:
-            return {"ok": False, "error": "没有可用的大模型，请配置API Key", "provider_errors": []}
+            logger.info("Demo mode (sync): no API keys configured, returning simulated response")
+            return _demo_response(user_prompt, task, use_json)
 
     for provider in providers:
         key = _get_key(settings, provider["key_env"])
@@ -442,6 +564,9 @@ def chat(
         result["quota_exhausted"] = True
         result["quota_providers"] = quota_providers
         result["error"] = f"你的 {'、'.join(q['key_desc'] for q in quota_providers)} 额度已用完，需要续费才能继续~"
+    else:
+        logger.info("All providers failed (sync), falling back to demo mode")
+        return _demo_response(user_prompt, task, use_json)
     return result
 
 
@@ -493,7 +618,8 @@ async def achat(
             if _get_key(settings, p["key_env"]):
                 providers.append(p)
         if not providers:
-            return {"ok": False, "error": "没有可用的大模型，请配置API Key", "provider_errors": []}
+            logger.info("Demo mode (async): no API keys configured, returning simulated response")
+            return _demo_response(user_prompt, task, use_json)
 
     for provider in providers:
         key = _get_key(settings, provider["key_env"])
@@ -668,6 +794,9 @@ async def achat(
         result["quota_exhausted"] = True
         result["quota_providers"] = quota_providers
         result["error"] = f"你的 {'、'.join(q['key_desc'] for q in quota_providers)} 额度已用完，需要续费才能继续~"
+    else:
+        logger.info("All providers failed (async), falling back to demo mode")
+        return _demo_response(user_prompt, task, use_json)
     return result
 
 
