@@ -833,7 +833,12 @@ case 'billing_renewal_payment': {
           )}
           {messages.map((msg, i) => (
             <div key={i} className={`chat-msg ${msg.type}`}>
-              {msg.type === 'system' && msg.content.includes('录音中') ? (
+              {msg.type === 'image' && msg.content && msg.content.startsWith('data:image') ? (
+                <div>
+                  <img src={msg.content} alt={msg.alt || 'QR Code'} style={{ maxWidth: '200px', borderRadius: '8px', cursor: 'pointer' }} onClick={() => window.open(msg.content, '_blank')} />
+                  {msg.alt && <div style={{ fontSize: '11px', color: '#888', marginTop: '4px' }}>{msg.alt}</div>}
+                </div>
+              ) : msg.type === 'system' && msg.content.includes('录音中') ? (
                 <>
                   {msg.content}
                   <div className="voice-bars">
