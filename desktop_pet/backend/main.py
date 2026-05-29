@@ -1276,11 +1276,29 @@ async def _process_ai_actions(actions: dict, send_func):
         if actions.get("open_browser"):
             url = str(actions["open_browser"]).strip()
             await _emit_step(send_func, "open_browser", "running", url[:60])
+            _BROWSER_ALLOWED_DOMAINS = (
+                "eastmoney.com", "xueqiu.com", "10jqka.com.cn",
+                "finance.sina.com.cn", "stockpage.10jqka.com.cn",
+                "iwencai.com", "openapi.iwencai.com",
+                "fund.eastmoney.com", "data.eastmoney.com",
+                "push2.eastmoney.com", "ai-saas.eastmoney.com",
+                "www.cninfo.com.cn", "sse.com.cn", "szse.cn",
+                "localhost", "127.0.0.1",
+            )
             import re as _url_re
-            _SAFE_URL_RE = _url_re.compile(r'^https://[a-zA-Z0-9._-]+(/.*)?$')
-            if not _SAFE_URL_RE.match(url) and not any(url.startswith(p) for p in ("http://localhost", "http://127.0.0.1")):
-                logger.warning("Blocked open_browser: URL not in allowlist: %s", url[:80])
-                await _emit_step(send_func, "open_browser", "blocked", f"不安全的URL: {url[:60]}")
+            _is_safe = False
+            if url.startswith(("http://localhost", "http://127.0.0.1")):
+                _is_safe = True
+            elif url.startswith("https://"):
+                try:
+                    from urllib.parse import urlparse as _urlparse
+                    host = _urlparse(url).hostname or ""
+                    _is_safe = any(host == d or host.endswith("." + d) for d in _BROWSER_ALLOWED_DOMAINS)
+                except Exception:
+                    pass
+            if not _is_safe:
+                logger.warning("Blocked open_browser: URL domain not allowed: %s", url[:80])
+                await _emit_step(send_func, "open_browser", "blocked", f"不支持的网站: {url[:50]}")
             else:
                 try:
                     import webbrowser
@@ -1448,20 +1466,28 @@ async def _process_ai_actions(actions: dict, send_func):
         if actions.get("trade_execute"):
             pick = actions["trade_execute"]
             if isinstance(pick, dict) and pick.get("symbol"):
-                await _emit_step(send_func, "trade_execute", "running", f"执行: {pick.get('action','')} {pick.get('symbol','')}")
-                platform_id = str(pick.get("platform_id", "eastmoney")).strip()[:20]
-                safe_pick = {
-                    "symbol": str(pick.get("symbol", ""))[:10],
-                    "name": str(pick.get("name", ""))[:30],
-                    "action": str(pick.get("action", "HOLD"))[:4],
-                    "confidence": pick.get("confidence", 0.65),
-                    "reasoning": str(pick.get("reasoning", ""))[:500],
-                    "entry_price": str(pick.get("entry_price", ""))[:20],
-                    "target_price": str(pick.get("target_price", ""))[:20],
-                    "stop_loss": str(pick.get("stop_loss", ""))[:20],
-                    "position_size": str(pick.get("position_size", "20%"))[:10],
-                }
-                _spawn(handle_trade_execute({"pick": safe_pick, "platform_id": platform_id}, send_func))
+                action = str(pick.get("action", "HOLD"))[:4]
+                symbol = str(pick.get("symbol", ""))[:10]
+                name = str(pick.get("name", ""))[:30]
+                confidence = pick.get("confidence", 0.65)
+                if action == "BUY" and confidence < 0.65:
+                    await _emit_step(send_func, "trade_execute", "blocked", f"置信度{confidence:.0%}<65%，不执行买入")
+                    await send_func("chat", {"text": f"⚠️ {name}({symbol})置信度仅{confidence:.0%}，低于65%阈值，不执行买入。需要更高把握才行~", "expression": "neutral"})
+                else:
+                    await _emit_step(send_func, "trade_execute", "running", f"执行: {action} {symbol}")
+                    platform_id = str(pick.get("platform_id", "eastmoney")).strip()[:20]
+                    safe_pick = {
+                        "symbol": symbol,
+                        "name": name,
+                        "action": action,
+                        "confidence": confidence,
+                        "reasoning": str(pick.get("reasoning", ""))[:500],
+                        "entry_price": str(pick.get("entry_price", ""))[:20],
+                        "target_price": str(pick.get("target_price", ""))[:20],
+                        "stop_loss": str(pick.get("stop_loss", ""))[:20],
+                        "position_size": str(pick.get("position_size", "20%"))[:10],
+                    }
+                    _spawn(handle_trade_execute({"pick": safe_pick, "platform_id": platform_id}, send_func))
             else:
                 await _emit_step(send_func, "trade_execute", "error", "缺少交易信息")
 
@@ -1472,8 +1498,15 @@ async def _process_ai_actions(actions: dict, send_func):
         if actions.get("broker_switch"):
             target = str(actions["broker_switch"]).strip().lower()
             if target in ("live", "实盘", "实盘模式"):
-                await _emit_step(send_func, "broker_switch", "running", "切换到实盘模式")
-                _spawn(handle_broker_switch({"mode": "live"}, send_func))
+                from potato.user_prefs import UserPrefs
+                prefs_check = UserPrefs()
+                risk_confirmed = bool(prefs_check.get("risk_confirmed", False))
+                if not risk_confirmed:
+                    await _emit_step(send_func, "broker_switch", "blocked", "风控未确认，无法切换实盘")
+                    await send_func("chat", {"text": "⚠️ 风控设置未确认！请先确认风控参数（止损5%/止盈10%/最多3只）才能切换到实盘模式。说「确认风控」即可。", "expression": "angry"})
+                else:
+                    await _emit_step(send_func, "broker_switch", "running", "切换到实盘模式")
+                    _spawn(handle_broker_switch({"mode": "live"}, send_func))
             elif target in ("dry_run", "模拟", "模拟模式", "dry"):
                 await _emit_step(send_func, "broker_switch", "running", "切换到模拟模式")
                 _spawn(handle_broker_switch({"mode": "dry_run"}, send_func))

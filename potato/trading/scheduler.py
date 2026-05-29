@@ -34,6 +34,7 @@ from potato.eastmoney import (
     get_hot_tables,
     get_realtime_quote as em_get_realtime_quote,
 )
+from potato.iwencai import IwencaiClient, format_iwencai_to_text
 from potato.trading.executor import TradeDecision, TradeExecutor
 from potato.trading.journal import TradeJournal
 from potato.risk import RiskValidator, RiskState, TradeRequest, SAFETY_RULES
@@ -94,6 +95,29 @@ async def _gather_eastmoney_context(symbols: list[str]) -> str:
                     blocks.append(f"- {h.get('name','?')}({h.get('code','?')}): 买入{h.get('buy','?')} 卖出{h.get('sell','?')}")
     except Exception:
         pass
+    return "\n".join(blocks) if blocks else ""
+
+
+async def _gather_iwencai_candidates(sectors: list[str] | None = None) -> str:
+    """Query Iwencai for stock candidates based on market conditions."""
+    blocks = []
+    iw = IwencaiClient()
+
+    queries = ["连续3天上涨的股票", "放量突破的股票", "机构净买入前10"]
+    if sectors:
+        for s in sectors[:2]:
+            queries.insert(0, f"属于{s}板块的强势股")
+
+    for q in queries[:3]:
+        try:
+            result = await asyncio.to_thread(iw.select_stocks, q, limit=5)
+            if result.get("ok") and result.get("stocks"):
+                stocks = result["stocks"][:5]
+                names = [f"{s.get('name','?')}({s.get('code','?')})" for s in stocks]
+                blocks.append(f"问财[{q}]: {', '.join(names)}")
+        except Exception:
+            pass
+
     return "\n".join(blocks) if blocks else ""
 
 
@@ -389,6 +413,15 @@ class TradingScheduler:
         except Exception:
             pass
 
+        iw_context = ""
+        try:
+            sectors = all_prefs.get("sectors", []) if all_prefs else []
+            iw_context = await _gather_iwencai_candidates(sectors)
+            if iw_context:
+                await self._emit_step("pre_market", "running", f"问财选股: {iw_context[:60]}")
+        except Exception as e:
+            logger.warning("Iwencai pre-market scan failed: %s", e)
+
         result = await self.run_manual_analysis(
             symbols=symbols,
             user_prefs=all_prefs,
@@ -404,7 +437,8 @@ class TradingScheduler:
 
         await self._emit("chat", {
             "text": f"🌅 盘前扫描完成\n分析了{len(symbols)}只自选股 + {len(news_items or [])}条资讯\n"
-                    + (f"发现{len([p for p in picks if p.get('action') in ('BUY','SELL')])}个操作信号" if picks else "暂无明确信号"),
+                    + (f"发现{len([p for p in picks if p.get('action') in ('BUY','SELL')])}个操作信号" if picks else "暂无明确信号")
+                    + (f"\n问财推荐: {iw_context[:100]}" if iw_context else ""),
             "expression": "happy" if picks else "neutral",
         })
         await self._emit_step("pre_market", "done", summary)

@@ -28,6 +28,7 @@ from potato.eastmoney import (
     get_hot_tables,
     get_realtime_quote as em_get_realtime_quote,
 )
+from potato.iwencai import IwencaiClient, format_iwencai_to_text
 
 logger = logging.getLogger("potato.trading.plan_execute")
 
@@ -45,14 +46,27 @@ async def create_analysis_plan(
     watchlist = prefs.get("watchlist", [])
     sectors = prefs.get("sectors", [])
 
+    iw_block = ""
+    try:
+        iw = IwencaiClient()
+        queries = [f"{s}最新行情" for s in symbols[:3]]
+        if sectors:
+            queries.insert(0, f"属于{sectors[0]}板块的强势股")
+        for q in queries[:2]:
+            result = await asyncio.to_thread(iw.select_stocks, q, limit=3)
+            if result.get("ok") and result.get("stocks"):
+                names = [f"{s.get('name','?')}({s.get('code','?')})" for s in result["stocks"][:3]]
+                iw_block += f"\n问财筛选「{q}」: {', '.join(names)}"
+    except Exception:
+        pass
+
     prompt = f"""你是专业操盘分析师。根据以下信息，制定一个详细的分析计划。
 
 股票: {', '.join(symbols)}
 风险偏好: {risk_level}
 自选股: {', '.join(watchlist) or '未设置'}
 关注板块: {', '.join(sectors) or '未设置'}
-{em_context}
-{sentiment_block}
+{em_context}{sentiment_block}{iw_block}
 
 请输出JSON格式的分析计划：
 {{
