@@ -5,16 +5,20 @@
  * 用法: node scripts/prepare-embedded-python.js
  */
 
-const fs = require('fs');
-const path = require('path');
-const { execSync } = require('child_process');
-const https = require('https');
+import fs from 'fs';
+import path from 'path';
+import { execSync } from 'child_process';
+import https from 'https';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const PYTHON_VERSION = '3.12.10';
 const PYTHON_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`;
 const PYTHON_DIR = path.join(__dirname, '../python');
 const ZIP_FILE = path.join(PYTHON_DIR, 'python.zip');
-const PYTHON_EXE = path.join(PYTHON_DIR, 'python', 'python.exe');
+const PYTHON_EXE = path.join(PYTHON_DIR, 'python.exe');
 
 console.log('🔧 小土豆嵌入式 Python 准备工具 v1.0');
 console.log(`📦 Python 版本: ${PYTHON_VERSION}`);
