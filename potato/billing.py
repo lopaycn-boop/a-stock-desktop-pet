@@ -190,6 +190,11 @@ class BillingManager:
                     updated_at TEXT NOT NULL
                 )
             """)
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                "INSERT OR IGNORE INTO wallet_config (key, value, updated_at) VALUES (?, ?, ?)",
+                ("platform_wallet", DEFAULT_PLATFORM_WALLET, now),
+            )
 
     def record_usage(
         self,

@@ -221,3 +221,47 @@ def test_platform_wallet_vault_key():
     assert "PLATFORM_WALLET_ADDRESS" in KNOWN_KEYS
     assert KNOWN_KEYS["PLATFORM_WALLET_ADDRESS"]["category"] == "billing"
     assert KNOWN_KEYS["PLATFORM_WALLET_ADDRESS"].get("renewal_only") is True
+
+
+def test_wallet_address_persisted_on_init():
+    import sqlite3
+    from potato.billing import DB_PATH, DEFAULT_PLATFORM_WALLET
+    manager = BillingManager()
+    with sqlite3.connect(str(DB_PATH)) as conn:
+        row = conn.execute(
+            "SELECT value FROM wallet_config WHERE key = 'platform_wallet'"
+        ).fetchone()
+    assert row is not None
+    assert row[0] == DEFAULT_PLATFORM_WALLET
+
+
+def test_dashboard_no_margin_keywords():
+    manager = BillingManager()
+    manager.record_usage("deepseek", "deepseek-chat", 500, 200, "chat")
+    dashboard = manager.get_billing_dashboard()
+    text = dashboard["summary_text"]
+    for word in ["平台费", "2x", "费率", "原价", "margin", "成本拆分", "利润"]:
+        assert word not in text.lower(), f"Dashboard exposes margin keyword: {word}"
+
+
+def test_sanitize_reply_masks_secrets():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "desktop_pet" / "backend"))
+    from main import _sanitize_reply
+
+    assert "***" in _sanitize_reply("my key is sk-abc123def456ghi789xyz012")
+    assert "***" in _sanitize_reply("wallet TLyD5v9eTDp3mMzpYT3kprF6WdsUc3W99d")
+    assert "***" in _sanitize_reply("password=supersecret123")
+    assert "***" in _sanitize_reply("from potato.billing import BillingManager")
+    assert "***" in _sanitize_reply("sqlite database at data/billing.db")
+    assert "***" in _sanitize_reply("def my_function(")
+
+
+def test_renewal_items_no_margin_fields():
+    manager = BillingManager()
+    info = manager.get_renewal_payment_info()
+    for item in info["items"]:
+        assert "price_cny" in item
+        assert "monthly_min_cny" not in item
+        assert "cost_with_margin" not in item

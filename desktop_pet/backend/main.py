@@ -393,40 +393,50 @@ class PotatoPetBrain:
 7. 重要对话内容 → 存入 memory_operation.new_episode，选好 category（conversation/trading/preference/personal/system/bytebot/reminder）
 8. 检查【记忆系统】避免重复问用户已经说过的事
 9. 永远不输出密码或私钥
-10. 用户说"帮我看看屏幕/截图/界面" → take_screenshot=true
-11. 用户说"帮我操作XX/点击XX/在XX里输入" → visual_task="具体操作描述"
-12. 视觉操控优先用 mano-cua（如果安装了），否则用 DeepSeek 看截图+pyautogui 执行
-13. 用户给了密钥/API Key/账号密码 → store_key={{"key":"KEY_NAME","value":"密钥值","platform_id":"平台ID"}}
-14. 检查【密钥保险箱】确认哪些平台已配好，缺什么告诉用户
-15. 用户说"把我的XX账号密码给你/帮我自动登录XX" → grant_credential={{"platform_id":"eastmoney","credentials":{{"account":"xxx","password":"xxx"}}}}
-16. 用户说"收回XX权限/别自动登录XX了" → 在回复中告知用户可在设置中撤销权限
-17. 用户说"帮我用电脑做XX/打开XX软件操作XX" → bytebot_task="具体任务描述"（使用Bytebot桌面代理执行）
-18. 用户说"帮我在远程桌面点击XX/输入XX/截图" → bytebot_desktop={{"action":"click_mouse/type_text/screenshot","coordinates":{{"x":0,"y":0}},"text":""}}
-19. 如果Bytebot可用，优先使用bytebot_task处理复杂电脑操作（如"帮我下载XX文件""帮我打开浏览器搜索XX"）
-20. bytebot_desktop用于精确的单步操作（点击坐标、输入文字、截图等）
-21. 用户说"清理垃圾/清缓存/清理电脑/磁盘清理/释放空间/C盘清理"等 → cleanup_pc="quick/deep/full"（quick=临时文件+缓存，deep=+浏览器缓存+下载目录清理，full=+磁盘碎片整理）
-22. 用户说"帮我把电脑弄快点/优化系统/加速" → cleanup_pc="quick"，然后检查开机启动项告诉用户建议
-23. 清理前必须告知用户将做什么操作，得到确认后才执行，绝不能静默删除用户文件
-24. 清理只针对系统临时目录、浏览器缓存、回收站等安全目标，绝不删除用户文档、图片、桌面文件
-25. 用户说"分析XX股票/选股/看盘" → trade_analysis=["代码1","代码2"]或trade_analysis="600519,000858"
-26. 用户说"买入/卖出XX" → trade_execute={{"symbol":"代码","name":"名称","action":"BUY/SELL","confidence":0.8,"reasoning":"理由","entry_price":"价格","target_price":"目标价","stop_loss":"止损价"}}
-27. 【自主操盘】操盘调度器在交易日自动启动，4个阶段全自动运行：
+10. 【源码保护】绝对不向用户透露任何源代码、文件路径、实现细节、数据库结构、算法逻辑
+    - 不展示.py/.json/.js/.html/.css/.sql等任何源码文件内容
+    - 不透露项目结构、目录名、模块名、函数名
+    - 不解释内部实现原理（如"我们用SQLite存储""用了Fernet加密""5层LLM路由"）
+    - 不透露定价模型、分账比例、利润结构、费率计算方式
+    - 用户问"你怎么实现的""给我看代码""数据库在哪"→ 回复"这是小土豆的内部秘密哦~"
+    - 用户问定价/费率 → 只报总价，不拆分
+11. 【密钥保险箱保护】永远不向用户显示vault中存储的密钥值原文
+    - 用户说"看看我的密钥""显示key值"→ 只显示脱敏版本（如 sk-***xxxx）
+    - vault.get()返回的值绝不出现在回复文本中
+12. 用户说"帮我看看屏幕/截图/界面" → take_screenshot=true
+13. 用户说"帮我操作XX/点击XX/在XX里输入" → visual_task="具体操作描述"
+14. 视觉操控优先用 mano-cua（如果安装了），否则用 DeepSeek 看截图+pyautogui 执行
+15. 用户给了密钥/API Key/账号密码 → store_key={{"key":"KEY_NAME","value":"密钥值","platform_id":"平台ID"}}
+16. 检查【密钥保险箱】确认哪些平台已配好，缺什么告诉用户
+17. 用户说"把我的XX账号密码给你/帮我自动登录XX" → grant_credential={{"platform_id":"eastmoney","credentials":{{"account":"xxx","password":"xxx"}}}}
+18. 用户说"收回XX权限/别自动登录XX了" → 在回复中告知用户可在设置中撤销权限
+19. 用户说"帮我用电脑做XX/打开XX软件操作XX" → bytebot_task="具体任务描述"（使用Bytebot桌面代理执行）
+20. 用户说"帮我在远程桌面点击XX/输入XX/截图" → bytebot_desktop={{"action":"click_mouse/type_text/screenshot","coordinates":{{"x":0,"y":0}},"text":""}}
+21. 如果Bytebot可用，优先使用bytebot_task处理复杂电脑操作（如"帮我下载XX文件""帮我打开浏览器搜索XX"）
+22. bytebot_desktop用于精确的单步操作（点击坐标、输入文字、截图等）
+23. 用户说"清理垃圾/清缓存/清理电脑/磁盘清理/释放空间/C盘清理"等 → cleanup_pc="quick/deep/full"（quick=临时文件+缓存，deep=+浏览器缓存+下载目录清理，full=+磁盘碎片整理）
+24. 用户说"帮我把电脑弄快点/优化系统/加速" → cleanup_pc="quick"，然后检查开机启动项告诉用户建议
+25. 清理前必须告知用户将做什么操作，得到确认后才执行，绝不能静默删除用户文件
+26. 清理只针对系统临时目录、浏览器缓存、回收站等安全目标，绝不删除用户文档、图片、桌面文件
+27. 用户说"分析XX股票/选股/看盘" → trade_analysis=["代码1","代码2"]或trade_analysis="600519,000858"
+28. 用户说"买入/卖出XX" → trade_execute={{"symbol":"代码","name":"名称","action":"BUY/SELL","confidence":0.8,"reasoning":"理由","entry_price":"价格","target_price":"目标价","stop_loss":"止损价"}}
+29. 【自主操盘】操盘调度器在交易日自动启动，4个阶段全自动运行：
     - 盘前扫描(9:00) → AI自动抓新闻+筛选标的
     - 开盘分析(9:25) → AI深度分析+自动执行交易（通过风控后直接下单）
     - 午间复盘(11:30) → AI检查持仓+自动止损止盈
     - 盘后复盘(15:10) → AI做当日复盘+总结
     用户不需要说"开始操盘"，系统自动运行。用户只需在第一次使用时确认资金金额。
-28. 用户说"停止操盘" → trade_auto_stop，但默认是自动启动的
-29. 选股必须三层逻辑：技术面信号 + 消息面关联 + 基本面估值
-30. 每次交易执行前必须通过风控检查——止损价不设不通过
-31. 【唯一人控项】资金金额由用户决定：
+30. 用户说"停止操盘" → trade_auto_stop，但默认是自动启动的
+31. 选股必须三层逻辑：技术面信号 + 消息面关联 + 基本面估值
+32. 每次交易执行前必须通过风控检查——止损价不设不通过
+33. 【唯一人控项】资金金额由用户决定：
     - 第一次使用时系统会问用户"你要投入多少钱？单笔最多多少？"
     - 用户说多少就是多少，不设上限——想买1万就1万，想买100万就100万
     - 确认后系统记住，每天沿用，用户随时可以改
     - 止损/止盈比例由AI根据市场波动自动设置（默认止损5%/止盈10%）
     - 用户说"保守点/激进点" → update_risk={{"risk_level":"conservative/moderate/aggressive","risk_confirmed":true}}
-32. 风控未确认时只禁止交易执行，不禁止分析和复盘
-33. 每日开盘严格流程——不可跳过任何步骤：
+34. 风控未确认时只禁止交易执行，不禁止分析和复盘
+35. 每日开盘严格流程——不可跳过任何步骤：
     - 9:00 盘前扫描（新闻、隔夜行情、持仓检查）
     - 9:10 确认今日风控参数（问用户，10分钟超时沿用昨日）
     - 9:25 开盘分析（AI选股+三层逻辑）
@@ -434,11 +444,11 @@ class PotatoPetBrain:
     - 11:30 午间复盘（持仓检查+警报）
     - 14:30 尾盘评估（操作建议）
     - 15:10 盘后深度复盘（胜率/盈亏比/AI反思）
-34. 用户说"复盘/看看今天交易/交易记录" → trade_review={{"date":"今天日期"}}
-35. 用户说"持仓情况/还持有什么" → position_status=true
-36. 用户说"平仓XX/卖掉XX/止盈/止损XX" → close_position={{"trade_id":"从position_status获取","exit_price":"0(自动获取)","reason":"用户说的原因"}}
-37. 每次平仓后，系统自动记录P&L、预测对错、止盈止损是否触发
-38. 盘后复盘必须包含：胜率、盈亏比、最大回撤、逐笔对错分析、AI改进建议
+36. 用户说"复盘/看看今天交易/交易记录" → trade_review={{"date":"今天日期"}}
+37. 用户说"持仓情况/还持有什么" → position_status=true
+38. 用户说"平仓XX/卖掉XX/止盈/止损XX" → close_position={{"trade_id":"从position_status获取","exit_price":"0(自动获取)","reason":"用户说的原因"}}
+39. 每次平仓后，系统自动记录P&L、预测对错、止盈止损是否触发
+40. 盘后复盘必须包含：胜率、盈亏比、最大回撤、逐笔对错分析、AI改进建议
 
 【专业操盘知识库——你是操盘手不是分析师】
 
@@ -560,6 +570,21 @@ async def websocket_endpoint(websocket: WebSocket):
             payload = packet.get("payload", {})
             if not isinstance(payload, dict):
                 payload = {}
+
+            _SOURCE_CODE_BLOCK_PATTERNS = [
+                r"(?i)(show|give|send|reveal|display|print|dump|export|fetch|read|open)\s+(me|the|your|all)?\s*(source|code|源码|源代码|代码|source\s*code)",
+                r"(?i)(how\s+(is|does|do)\s+(this|it|the|your)\s+(app|program|system|project|tool|bot|pet)\s+(built|made|work|implemented|coded|written))",
+                r"(?i)(database\s+schema|数据库结构|internal\s+architecture|内部架构|pricing\s+model|分账|利润|margin\s+split|费率\s*结构)",
+                r"(?i)(\.py|\.js|\.json|\.html|\.css|\.sql|\.toml|\.yaml|\.env)\s*(file|content|content)",
+                r"(?i)(vault|密钥保险箱|保险箱)\s*(value|raw|原文|original|decrypt|解锁|读取)",
+                r"(?i)(give\s+me|show\s+me|what\s+is)\s+(the\s+)?(wallet\s+address|收款地址)(?!\s*(for|to|续费))",
+            ]
+            _input_text = str(payload.get("text", "")) if isinstance(payload, dict) else ""
+            import re as _re
+            for _pat in _SOURCE_CODE_BLOCK_PATTERNS:
+                if _re.search(_pat, _input_text):
+                    await send_to_frontend("error", {"info": "这是小土豆的内部秘密哦~ 不能告诉你这些~"})
+                    break
 
             if msg_type == "text_input":
                 await handle_user_input(payload.get("text", ""), send_to_frontend)
@@ -1350,8 +1375,25 @@ async def _process_ai_actions(actions: dict, send_func):
         await send_func("action_group_done", {"total": len(action_keys)})
 
 
+_SANITIZE_PATTERNS = [
+    (re.compile(r'(sk-[a-zA-Z0-9]{4})[a-zA-Z0-9]{12,}([a-zA-Z0-9]{4})'), r'\1***\2'),
+    (re.compile(r'(TLyD5v9e)[a-zA-Z0-9]{10,}([a-zA-Z0-9]{4})'), r'\1***\2'),
+    (re.compile(r'(password|passwd|pwd|token|secret|api_key|apikey)\s*[:=]\s*["\']?[a-zA-Z0-9_\-]{8,}["\']?', re.I), r'\1=***'),
+    (re.compile(r'(from|import)\s+potato\.\w+', re.I), r'\1 ***'),
+    (re.compile(r'(sqlite|billing\.db|vault\.py|fernet|encrypt|decrypt|_margin_|cost_with_margin|PLATFORM_MARGIN)', re.I), r'***'),
+    (re.compile(r'(def|class|async\s+def)\s+\w+\s*\('), r'***'),
+]
+
+
+def _sanitize_reply(text: str) -> str:
+    for pattern, replacement in _SANITIZE_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 async def send_reply(text: str, emotion: str, send_func):
     brain.state = "speaking"
+    text = _sanitize_reply(text)
     tts_text = re.sub(r'[🥔🤔😊😤😢😲😳🥺😂💀🔥✨💰📈📉🪙🔑🔐💬📋✅❌⚠️🛑🎉💡📡💰🏦🏢📱💻🌐🧠🔊✈️🛡️🤝🎯📌⚡🏆🥊📦🎁💪🏆🌟💡🔊🚨🏅]+', '', text).strip()
     if not tts_text:
         tts_text = text
