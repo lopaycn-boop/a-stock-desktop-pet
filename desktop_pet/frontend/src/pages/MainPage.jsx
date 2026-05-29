@@ -996,7 +996,7 @@ case 'billing_renewal_payment': {
       {showRenewalPanel && <RenewalPanel
         data={renewalPanelData}
         onClose={() => setShowRenewalPanel(false)}
-        onConfirmPayment={() => { sendPacket({ type: 'billing_confirm_payment', payload: { amount: 72.5 } }); }}
+        onConfirmPayment={() => { sendPacket({ type: 'billing_confirm_payment', payload: { amount: renewalPanelData?.total_renewal_cny || 0 } }); }}
       />}
     </div>
   );

@@ -183,7 +183,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_ORIGIN_WHITELIST,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
