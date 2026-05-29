@@ -67,6 +67,8 @@ KNOWN_KEYS = {
     "PLATFORM_WALLET_ADDRESS": {"category": "billing", "desc": "平台数字币收款地址（续费时显示）", "renewal_only": True},
     "ANTHROPIC_API_KEY": {"category": "api_key", "desc": "Anthropic Claude API Key (Bytebot)",
                           "renewal_url": "https://console.anthropic.com/settings/billing", "dashboard_url": "https://console.anthropic.com/settings/keys"},
+    "EM_API_KEY": {"category": "api_key", "desc": "东方财富AI SaaS API Key（上证异动/业绩点评/行业研究）",
+                   "renewal_url": "https://ai-saas.eastmoney.com", "dashboard_url": "https://ai-saas.eastmoney.com"},
 }
 
 _CIPHER = None

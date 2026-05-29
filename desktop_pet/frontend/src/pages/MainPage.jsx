@@ -643,6 +643,48 @@ case 'billing_renewal_payment': {
         }
         break;
       }
+      case 'em_financial_qa':
+      case 'em_earnings_review':
+      case 'em_industry_research':
+      case 'em_tracking_report':
+      case 'em_hotspot_discovery':
+      case 'em_comparable_company': {
+        const emContent = payload?.content || payload?.answer || '暂无数据';
+        setMessages(prev => [...prev, { type: 'system', content: `📊 ${emContent}` }]);
+        break;
+      }
+      case 'stock_changes': {
+        const changes = payload?.changes || [];
+        const changeCount = changes.length;
+        setMessages(prev => [...prev, { type: 'system', content: `📈 异动监控: 发现${changeCount}只异动股票` }]);
+        break;
+      }
+      case 'hot_tables': {
+        const tables = payload?.data || [];
+        setMessages(prev => [...prev, { type: 'system', content: `🀄 龙虎榜: ${tables.length > 0 ? `获取${tables.length}条数据` : '暂无数据'}` }]);
+        break;
+      }
+      case 'chip_distribution': {
+        const chipData = payload?.data || {};
+        setMessages(prev => [...prev, { type: 'system', content: `📊 筹码分布: ${Object.keys(chipData).length > 0 ? '已获取' : '暂无数据'}` }]);
+        break;
+      }
+      case 'sentiment_analysis': {
+        const score = payload?.score || 0;
+        const category = payload?.category || '中性';
+        const emoji = category === '看涨' ? '🟢' : category === '看跌' ? '🔴' : '⚪';
+        setMessages(prev => [...prev, { type: 'system', content: `${emoji} 情感分析: ${category} (得分: ${score})` }]);
+        break;
+      }
+      case 'realtime_quote': {
+        const q = payload || {};
+        if (q.name) {
+          setMessages(prev => [...prev, { type: 'system', content: `💹 ${q.name}(${q.code}): ¥${q.price} ${q.change_pct >= 0 ? '📈' : '📉'}${q.change_pct}%` }]);
+        } else {
+          setMessages(prev => [...prev, { type: 'system', content: '❌ 行情获取失败' }]);
+        }
+        break;
+      }
       default:
         break;
     }

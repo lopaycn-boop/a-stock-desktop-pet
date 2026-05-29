@@ -48,6 +48,10 @@ from potato.trading.journal import TradeJournal
 from potato.trading.executor import TradeExecutor
 from potato.trading.analyzer import deep_analysis, fetch_realtime_quote, format_trade_decision_for_pet, format_trade_signal_message
 from potato.billing import BillingManager
+from potato.eastmoney import (
+    EastMoneyClient, analyze_sentiment, get_stock_changes,
+    get_hot_tables, get_chip_distribution, get_realtime_quote,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -758,6 +762,39 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "billing_confirm_payment":
                 await handle_billing_confirm_payment(payload, send_to_frontend)
+
+            elif msg_type == "em_financial_qa":
+                await handle_em_financial_qa(payload, send_to_frontend)
+
+            elif msg_type == "em_earnings_review":
+                await handle_em_earnings_review(payload, send_to_frontend)
+
+            elif msg_type == "em_industry_research":
+                await handle_em_industry_research(payload, send_to_frontend)
+
+            elif msg_type == "em_tracking_report":
+                await handle_em_tracking_report(payload, send_to_frontend)
+
+            elif msg_type == "em_hotspot_discovery":
+                await handle_em_hotspot_discovery(payload, send_to_frontend)
+
+            elif msg_type == "em_comparable_company":
+                await handle_em_comparable_company(payload, send_to_frontend)
+
+            elif msg_type == "stock_changes":
+                await handle_stock_changes(send_to_frontend)
+
+            elif msg_type == "hot_tables":
+                await handle_hot_tables(payload, send_to_frontend)
+
+            elif msg_type == "chip_distribution":
+                await handle_chip_distribution(payload, send_to_frontend)
+
+            elif msg_type == "sentiment_analysis":
+                await handle_sentiment_analysis(payload, send_to_frontend)
+
+            elif msg_type == "realtime_quote":
+                await handle_realtime_quote(payload, send_to_frontend)
 
             else:
                 logger.warning("Unknown msg_type from frontend: %s", msg_type)
@@ -2963,3 +3000,163 @@ if __name__ == "__main__":
         log_level="info",
         timeout_graceful_shutdown=5,
     )
+
+
+# ── EastMoney Data Handlers ─────────────────────────────────────────────
+
+_EM_KEY = os.environ.get("EM_API_KEY", "")
+
+
+def _em_client() -> EastMoneyClient:
+    from potato.vault import Vault
+    key = _EM_KEY
+    if not key:
+        try:
+            key = Vault().get("EM_API_KEY") or ""
+        except Exception:
+            pass
+    return EastMoneyClient(api_key=key)
+
+
+async def handle_em_financial_qa(payload: dict, send_func):
+    """Ask EastMoney AI a financial question."""
+    question = payload.get("question", "")
+    stock_code = payload.get("stock_code", "")
+    if not question:
+        await send_func("error", {"info": "请提供问题"})
+        return
+    try:
+        client = _em_client()
+        answer = client.financial_qa(question, stock_code)
+        if answer:
+            await send_func("em_financial_qa", {"question": question, "answer": answer})
+        else:
+            await send_func("em_financial_qa", {"question": question, "answer": "暂无数据"})
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_em_earnings_review(payload: dict, send_func):
+    """Get earnings review for a stock."""
+    stock_code = payload.get("stock_code", "")
+    if not stock_code:
+        await send_func("error", {"info": "请提供股票代码"})
+        return
+    try:
+        client = _em_client()
+        result = client.earnings_review(stock_code)
+        await send_func("em_earnings_review", {"stock_code": stock_code, "content": result or "暂无数据"})
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_em_industry_research(payload: dict, send_func):
+    """Get industry research report."""
+    industry = payload.get("industry", "")
+    stock_code = payload.get("stock_code", "")
+    if not industry:
+        await send_func("error", {"info": "请提供行业名称"})
+        return
+    try:
+        client = _em_client()
+        result = client.industry_research(industry, stock_code)
+        await send_func("em_industry_research", {"industry": industry, "content": result or "暂无数据"})
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_em_tracking_report(payload: dict, send_func):
+    """Get tracking report for a stock."""
+    stock_code = payload.get("stock_code", "")
+    if not stock_code:
+        await send_func("error", {"info": "请提供股票代码"})
+        return
+    try:
+        client = _em_client()
+        result = client.tracking_report(stock_code)
+        await send_func("em_tracking_report", {"stock_code": stock_code, "content": result or "暂无数据"})
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_em_hotspot_discovery(payload: dict, send_func):
+    """Discover market hotspots."""
+    keyword = payload.get("keyword", "")
+    try:
+        client = _em_client()
+        result = client.hotspot_discovery(keyword)
+        await send_func("em_hotspot_discovery", {"keyword": keyword, "content": result or "暂无数据"})
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_em_comparable_company(payload: dict, send_func):
+    """Get comparable company analysis."""
+    stock_code = payload.get("stock_code", "")
+    if not stock_code:
+        await send_func("error", {"info": "请提供股票代码"})
+        return
+    try:
+        client = _em_client()
+        result = client.comparable_company(stock_code)
+        await send_func("em_comparable_company", {"stock_code": stock_code, "content": result or "暂无数据"})
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_stock_changes(send_func):
+    """Get real-time stock anomaly data (22 types)."""
+    try:
+        changes = get_stock_changes()
+        await send_func("stock_changes", {"changes": changes, "count": len(changes)})
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_hot_tables(payload: dict, send_func):
+    """Get Dragon Tiger List (龙虎榜) data."""
+    market = payload.get("market", 1)
+    try:
+        tables = get_hot_tables(market=market)
+        await send_func("hot_tables", {"market": market, "data": tables})
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_chip_distribution(payload: dict, send_func):
+    """Get chip/cost distribution for a stock."""
+    stock_code = payload.get("stock_code", "")
+    if not stock_code:
+        await send_func("error", {"info": "请提供股票代码"})
+        return
+    try:
+        data = get_chip_distribution(stock_code)
+        await send_func("chip_distribution", {"stock_code": stock_code, "data": data})
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_sentiment_analysis(payload: dict, send_func):
+    """Analyze financial sentiment of text."""
+    text = payload.get("text", "")
+    if not text:
+        await send_func("error", {"info": "请提供要分析的文本"})
+        return
+    try:
+        result = analyze_sentiment(text)
+        await send_func("sentiment_analysis", result)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_realtime_quote(payload: dict, send_func):
+    """Get real-time stock quote from Sina Finance."""
+    stock_code = payload.get("stock_code", "")
+    if not stock_code:
+        await send_func("error", {"info": "请提供股票代码"})
+        return
+    try:
+        quote = get_realtime_quote(stock_code)
+        await send_func("realtime_quote", quote)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
