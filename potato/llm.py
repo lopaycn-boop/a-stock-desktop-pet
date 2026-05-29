@@ -76,6 +76,17 @@ PROVIDERS = [
         "priority": {"chat": 4, "analysis": 4, "research": 3, "fallback": 4},
         "renewal_url": "https://platform.openai.com/account/billing",
     },
+    {
+        "name": "base44",
+        "url": "https://app.base44.com/api/agents/6a19e13d4d95b70e27284d17",
+        "key_env": "BASE44_API_KEY",
+        "model": "base44-agent",
+        "supports_json_mode": False,
+        "capabilities": ["chat", "research", "fallback"],
+        "priority": {"chat": 3, "analysis": 5, "research": 2, "fallback": 5},
+        "renewal_url": "https://app.base44.com",
+        "provider_type": "base44",
+    },
 ]
 
 TASK_TYPES = {"chat", "analysis", "research", "fallback"}
@@ -118,6 +129,9 @@ def _get_key(settings: Settings, key_env: str) -> str:
     elif key_env == "OPENAI_API_KEY":
         import os
         key = os.environ.get("OPENAI_API_KEY", "")
+    elif key_env == "BASE44_API_KEY":
+        import os
+        key = os.environ.get("BASE44_API_KEY", "")
     if not key:
         try:
             from potato.vault import Vault
@@ -226,6 +240,12 @@ def chat(
 
         model = provider["model"] if provider["name"] != "deepseek" else _model_id(settings)
         supports_json = provider.get("supports_json_mode", True) and use_json
+
+        if provider.get("provider_type") == "base44":
+            result = _call_base44(provider, key, system, user_prompt, max_tokens, task, errors)
+            if result is not None:
+                return result
+            continue
 
         for attempt in range(_MAX_RETRIES):
             try:
@@ -350,6 +370,7 @@ def chat(
                 errors.append(f"{provider['name']}: {mask_secret(str(exc))[:100]}")
 
     logger.error("All LLM providers failed for task '%s': %s", task, " | ".join(errors[:3]))
+
     quota_providers = []
     for err in errors:
         for p in PROVIDERS:
@@ -392,3 +413,104 @@ def quick_chat(prompt: str, *, system: str = "", settings: Settings | None = Non
 # ── Legacy alias ───────────────────────────────────────────────────────
 
 call_llm = chat
+
+
+# ── Base44 agent call ──────────────────────────────────────────────────
+
+def _call_base44(
+    provider: dict,
+    key: str,
+    system: str,
+    user_prompt: str,
+    max_tokens: int,
+    task: str,
+    errors: list[str],
+) -> dict[str, Any] | None:
+    try:
+        base_url = provider["url"].rstrip("/")
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+        conv_resp = httpx.post(
+            f"{base_url}/conversations",
+            headers=headers,
+            json={"agent_name": "default", "metadata": {"source": "potato", "task": task}},
+            timeout=_TIMEOUT,
+        )
+        if conv_resp.status_code in (401, 403):
+            _mark_failure(provider["name"], "auth")
+            errors.append(f"{provider['name']}: auth error (status={conv_resp.status_code})")
+            return None
+        if conv_resp.status_code != 200:
+            errors.append(f"{provider['name']}: conv create HTTP {conv_resp.status_code}")
+            return None
+        conv_data = conv_resp.json()
+        conv_id = conv_data.get("id") or conv_data.get("conversation_id")
+        if not conv_id:
+            errors.append(f"{provider['name']}: no conversation ID returned")
+            return None
+        msg_payload = {
+            "role": "user",
+            "content": f"{system}\n\n{user_prompt}" if system else user_prompt,
+        }
+        msg_resp = httpx.post(
+            f"{base_url}/conversations/{conv_id}/messages",
+            headers=headers,
+            json=msg_payload,
+            timeout=httpx.Timeout(connect=8.0, read=120.0, write=10.0, pool=30.0),
+        )
+        if msg_resp.status_code != 200:
+            errors.append(f"{provider['name']}: msg send HTTP {msg_resp.status_code}")
+            return None
+        msg_data = msg_resp.json()
+        content = ""
+        if isinstance(msg_data, dict):
+            content = msg_data.get("content", "")
+            if isinstance(content, dict):
+                content = content.get("text", str(content))
+        elif isinstance(msg_data, str):
+            content = msg_data
+        if not content:
+            conv_check = httpx.get(
+                f"{base_url}/conversations/{conv_id}",
+                headers=headers,
+                timeout=_TIMEOUT,
+            )
+            if conv_check.status_code == 200:
+                full_conv = conv_check.json()
+                messages = full_conv.get("messages", [])
+                for m in reversed(messages):
+                    if m.get("role") == "assistant":
+                        c = m.get("content", "")
+                        if c:
+                            content = c if isinstance(c, str) else str(c)
+                            break
+        if not content.strip():
+            errors.append(f"{provider['name']}: empty response from agent")
+            return None
+        try:
+            httpx.delete(f"{base_url}/conversations/{conv_id}", headers=headers, timeout=httpx.Timeout(5.0))
+        except Exception:
+            pass
+        _mark_success(provider["name"])
+        logger.info("LLM chat success from %s (base44 agent, task=%s)", provider["name"], task)
+        return {
+            "ok": True,
+            "content": content.strip(),
+            "model": provider["model"],
+            "provider": provider["name"],
+            "task": task,
+        }
+    except httpx.TimeoutException:
+        _mark_failure(provider["name"], "timeout")
+        errors.append(f"{provider['name']}: timeout")
+        return None
+    except json.JSONDecodeError:
+        _mark_failure(provider["name"], "json")
+        errors.append(f"{provider['name']}: invalid JSON from Base44")
+        return None
+    except Exception as exc:
+        _mark_failure(provider["name"], "unknown")
+        errors.append(f"{provider['name']}: {mask_secret(str(exc))[:100]}")
+        return None
