@@ -264,12 +264,14 @@ def test_sanitize_reply_masks_secrets():
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "desktop_pet" / "backend"))
     from main import _sanitize_reply
 
-    assert "***" in _sanitize_reply("my key is sk-abc123def456ghi789xyz012")
-    assert "***" in _sanitize_reply("wallet TLyD5v9eTDp3mMzpYT3kprF6WdsUc3W99d")
-    assert "***" in _sanitize_reply("password=supersecret123")
-    assert "***" in _sanitize_reply("from potato.billing import BillingManager")
-    assert "***" in _sanitize_reply("sqlite database at data/billing.db")
-    assert "***" in _sanitize_reply("def my_function(")
+    assert "***" in _sanitize_reply("my key is sk-abc12345def67890xyz012abc345def678"), "sk-key not masked"
+    assert "***" in _sanitize_reply("wallet TLyD5v9eTDp3mMzpYT3kprF6WdsUc3W99d"), "wallet not masked"
+    assert "***" in _sanitize_reply("password=supersecret123"), "password not masked"
+    assert "***" in _sanitize_reply("from potato.billing import BillingManager"), "import not masked"
+    assert "***" in _sanitize_reply("sqlite database at data/billing.db"), "db path not masked"
+    assert "***" in _sanitize_reply("def my_function("), "def not masked"
+    assert "***" in _sanitize_reply("PLATFORM_MARGIN_RATE = 1.0"), "margin rate not masked"
+    assert "***" in _sanitize_reply("cost_with_margin = 72.5"), "margin field not masked"
 
 
 def test_renewal_items_no_margin_fields():
