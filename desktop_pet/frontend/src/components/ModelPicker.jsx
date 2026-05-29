@@ -25,26 +25,35 @@ export default function ModelPicker({ currentModel, onSwitch }) {
           <div className="model-picker-overlay" onClick={() => setOpen(false)} />
           <div className="model-picker-dropdown">
             <div className="model-picker-header">🎭 选择桌宠模型</div>
-            {models.map(m => (
-              <button
-                key={m.id}
-                className={`model-picker-item ${currentModel === m.id ? 'active' : ''}`}
-                onClick={() => {
-                  onSwitch(m.id)
-                  saveModelId(m.id)
-                  setOpen(false)
-                }}
-              >
-                <span className="model-picker-item-avatar">
-                  {(m.nameZh || m.name).charAt(0)}
-                </span>
-                <span className="model-picker-item-info">
-                  <span className="model-picker-item-name">{m.nameZh || m.name}</span>
-                  <span className="model-picker-item-desc">{m.description}</span>
-                </span>
-                {currentModel === m.id && <span className="model-picker-check">✓</span>}
-              </button>
-            ))}
+            {models.map(m => {
+              const unavailable = m.available === false
+              return (
+                <button
+                  key={m.id}
+                  className={`model-picker-item ${currentModel === m.id ? 'active' : ''} ${unavailable ? 'unavailable' : ''}`}
+                  disabled={unavailable}
+                  onClick={() => {
+                    if (unavailable) return
+                    onSwitch(m.id)
+                    saveModelId(m.id)
+                    setOpen(false)
+                  }}
+                  title={unavailable ? (m.installHint || '模型未安装') : ''}
+                >
+                  <span className="model-picker-item-avatar">
+                    {(m.nameZh || m.name).charAt(0)}
+                  </span>
+                  <span className="model-picker-item-info">
+                    <span className="model-picker-item-name">
+                      {m.nameZh || m.name}
+                      {unavailable && <span style={{fontSize: 10, color: '#ff9800', marginLeft: 4}}>未安装</span>}
+                    </span>
+                    <span className="model-picker-item-desc">{m.description}</span>
+                  </span>
+                  {currentModel === m.id && !unavailable && <span className="model-picker-check">✓</span>}
+                </button>
+              )
+            })}
             <div className="model-picker-footer">
               更多模型从 Live2D 官网下载后放入 public/models/ 目录
             </div>

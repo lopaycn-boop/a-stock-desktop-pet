@@ -96,6 +96,13 @@ const Live2DDisplay = forwardRef(({ modelId }, ref) => {
       return
     }
 
+    if (config.available === false) {
+      const hint = config.installHint || `${config.nameZh || config.name} 模型文件未安装，请下载后放入 public/models/${targetModelId}/`
+      console.warn(`Model not available: ${targetModelId}`)
+      setLoadError(hint)
+      return
+    }
+
     if (modelRef.current) {
       try { modelRef.current.destroy() } catch {}
       modelRef.current = null

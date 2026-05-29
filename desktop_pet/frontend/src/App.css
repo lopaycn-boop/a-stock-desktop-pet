@@ -641,6 +641,16 @@
   border-color: rgba(100, 108, 255, 0.5);
 }
 
+.model-picker-item.unavailable {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: rgba(60, 60, 60, 0.3);
+}
+
+.model-picker-item.unavailable:hover {
+  background: rgba(60, 60, 60, 0.4);
+}
+
 .model-picker-item-avatar {
   display: inline-flex;
   align-items: center;
