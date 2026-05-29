@@ -502,36 +502,6 @@ class PotatoPetBrain:
 49. 用户说"帮我选股/筛选XX条件的股票/连续涨停的股票" → iwencai_query="自然语言选股条件"（问财智能选股）
 50. 用户说"查宏观/CPI/GDP/PMI" → iwencai_query="宏观指标名称"（问财宏观数据）
 51. 用户说"搜索XX新闻/研报/公告" → iwencai_search={"keyword":"关键词","channel":"news/report/investor/announcement"}
-28. 用户说"买入/卖出XX" → trade_execute={{"symbol":"代码","name":"名称","action":"BUY/SELL","confidence":0.8,"reasoning":"理由","entry_price":"价格","target_price":"目标价","stop_loss":"止损价"}}
-29. 【自主操盘】操盘调度器在交易日自动启动，4个阶段全自动运行：
-    - 盘前扫描(9:00) → AI自动抓新闻+筛选标的
-    - 开盘分析(9:25) → AI深度分析+自动执行交易（通过风控后直接下单）
-    - 午间复盘(11:30) → AI检查持仓+自动止损止盈
-    - 盘后复盘(15:10) → AI做当日复盘+总结
-    用户不需要说"开始操盘"，系统自动运行。用户只需在第一次使用时确认资金金额。
-30. 用户说"停止操盘" → trade_auto_stop，但默认是自动启动的
-31. 选股必须三层逻辑：技术面信号 + 消息面关联 + 基本面估值
-32. 每次交易执行前必须通过风控检查——止损价不设不通过
-33. 【唯一人控项】资金金额由用户决定：
-    - 第一次使用时系统会问用户"你要投入多少钱？单笔最多多少？"
-    - 用户说多少就是多少，不设上限——想买1万就1万，想买100万就100万
-    - 确认后系统记住，每天沿用，用户随时可以改
-    - 止损/止盈比例由AI根据市场波动自动设置（默认止损5%/止盈10%）
-    - 用户说"保守点/激进点" → update_risk={{"risk_level":"conservative/moderate/aggressive","risk_confirmed":true}}
-34. 风控未确认时只禁止交易执行，不禁止分析和复盘
-35. 每日开盘严格流程——不可跳过任何步骤：
-    - 9:00 盘前扫描（新闻、隔夜行情、持仓检查）
-    - 9:10 确认今日风控参数（问用户，10分钟超时沿用昨日）
-    - 9:25 开盘分析（AI选股+三层逻辑）
-    - 9:30-15:00 盘中监控（止盈止损实时盯盘）
-    - 11:30 午间复盘（持仓检查+警报）
-    - 14:30 尾盘评估（操作建议）
-    - 15:10 盘后深度复盘（胜率/盈亏比/AI反思）
-36. 用户说"复盘/看看今天交易/交易记录" → trade_review={{"date":"今天日期"}}
-37. 用户说"持仓情况/还持有什么" → position_status=true
-38. 用户说"平仓XX/卖掉XX/止盈/止损XX" → close_position={{"trade_id":"从position_status获取","exit_price":"0(自动获取)","reason":"用户说的原因"}}
-39. 每次平仓后，系统自动记录P&L、预测对错、止盈止损是否触发
-40. 盘后复盘必须包含：胜率、盈亏比、最大回撤、逐笔对错分析、AI改进建议
 
 【专业操盘知识库——你是操盘手不是分析师】
 
@@ -630,6 +600,23 @@ def version():
         "build": BUILD,
         "features": FEATURES,
     })
+
+
+@app.get("/verify")
+def verify():
+    from potato.verify import verify as _verify
+    import io, sys
+    old_stdout = sys.stdout
+    sys.stdout = io.StringIO()
+    try:
+        ok = _verify()
+        output = sys.stdout.getvalue()
+    except Exception as e:
+        ok = False
+        output = str(e)
+    finally:
+        sys.stdout = old_stdout
+    return JSONResponse({"ok": ok, "output": output})
 
 
 @app.websocket("/ws")
