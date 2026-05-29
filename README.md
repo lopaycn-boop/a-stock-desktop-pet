@@ -10,14 +10,14 @@
 
 ## ✨ 功能特性
 
-- 🐱 **Live2D 桌面角色** — 6款模型可选（含表情映射），待在桌面上陪你盯盘
+- 🐱 **Live2D 桌面角色** — 6款模型全部可用（8种表情/情绪映射），待在桌面上陪你盯盘
 - 💬 **AI 对话** — 基于 DeepSeek 大模型，口语化交流，自然理解股票术语
 - 🤖 **自主操盘** — 交易日7阶段全自动：盘前→开盘→风控→执行→午间→尾盘→盘后复盘
 - 📊 **专业复盘** — 每日盘后深度复盘：胜率、盈亏比、最大回撤、逐笔对错、AI反思
 - 📰 **实时资讯** — Google News RSS 抓取A股资讯，AI关联分析个股
-- 🔄 **4层 LLM 故障转移** — DeepSeek → SiliconFlow → Liner → OpenAI，额度用完自动切换
+- 🔄 **5层 LLM 故障转移** — DeepSeek → SiliconFlow → Liner → Base44 Agent → OpenAI，额度用完自动切换
 - 🖥️ **Bytebot 远程操控** — 内置Bytebot Agent(9991) + Bytebot Desktop(9990)，语音指令操控电脑
-- 🛡️ **严格风控系统** — 止损必设、用户定金额、AI定止损止盈、熔断机制、仓位管理
+- 🛡️ **严格风控系统** — 止损必设、用户定金额、AI定止损止盈、熔断机制、仓位管理（13条规则）
 - 🔐 **密钥保险箱** — Fernet(AES-128-CBC+HMAC-SHA256) 加密存储，前端7层正则遮蔽，绝不泄漏密钥
 - 🎙️ **语音交互** — SiliconFlow TTS/STT，支持语音对话
 - 📱 **多渠道通知** — Telegram / 飞书 / 钉钉推送交易提醒
@@ -38,7 +38,7 @@
 │  │         FastAPI 后端 (Python :8000)            │  │
 │  │  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │  │
 │  │  │ AI 服务   │ │ 交易引擎 │ │   风控系统      │ │  │
-│  │  │ 4层故障转移│ │ 7阶段调度 │ │ 12条规则       │ │  │
+│  │  │ 5层故障转移│ │ 7阶段调度 │ │ 13条规则       │ │  │
 │  │  └──────────┘ └──────────┘ └────────────────┘ │  │
 │  │  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │  │
 │  │  │密钥保险箱 │ │Bytebot   │ │   专业复盘      │ │  │
@@ -98,10 +98,11 @@ python -m potato
 
 | 变量 | 说明 | 获取地址 |
 |------|------|----------|
-| `DEEPSEEK_API_KEY` | DeepSeek 大模型 (**推荐**) | [platform.deepseek.com](https://platform.deepseek.com) |
-| `SILICON_API_KEY` | SiliconFlow TTS/STT | [cloud.siliconflow.cn](https://cloud.siliconflow.cn) |
-| `LINER_API_KEY` | Liner AI (故障转移) | [platform.liner.com](https://platform.liner.com) |
+| `DEEPSEEK_API_KEY` | DeepSeek 大模型 (**推荐，必须**) | [platform.deepseek.com](https://platform.deepseek.com) |
+| `SILICON_API_KEY` | SiliconFlow (故障转移) | [cloud.siliconflow.cn](https://cloud.siliconflow.cn) |
+| `LINER_API_KEY` | Liner AI (故障转移) | [liner.ai](https://liner.ai) |
 | `OPENAI_API_KEY` | OpenAI (故障转移) | [platform.openai.com](https://platform.openai.com) |
+| `BASE44_API_KEY` | Base44 Agent (故障转移) | [app.base44.com](https://app.base44.com) |
 
 首次启动后，直接在聊天窗口粘贴 API Key 即可，小土豆会自动加密存储并刷新配置。
 
@@ -148,25 +149,27 @@ python -m potato
 | 2 | 单笔限额 | 不超过用户设定金额 |
 | 3 | 日限额 | 不超过用户设定日限额 |
 | 4 | 最多持仓 | 用户设定（建议 3 只） |
-| 5 | 最低置信度 | confidence < 0.65 不推荐买入 |
-| 6 | 黑名单 | ST/N 股票禁止交易 |
-| 7 | 尾盘限制 | 14:45 后禁止新开仓 |
-| 8 | 日亏损限制 | 日亏损超过限额自动停止 |
-| 9 | 交易时间 | 仅限 A股交易时间 |
-| 10 | 价格验证 | 下单前比对实时行情（偏差 > 3% 拦截） |
+| 5 | 止损门控 | AI 自动设定止损价（默认 5%），触发即卖出 |
+| 6 | 最低置信度 | confidence < 0.65 不推荐买入 |
+| 7 | 黑名单 | ST/N 股票禁止交易 |
+| 8 | 尾盘限制 | 14:45 后禁止新开仓 |
+| 9 | 日亏损限制 | 日亏损超过限额自动停止 |
+| 10 | 交易时间 | 仅限 A股交易时间 |
+| 11 | 价格验证 | 下单前比对实时行情（偏差 > 3% 拦截） |
+| 12 | 异常波动 | 涨跌停板附近禁止交易 |
 
 ## 🎭 Live2D 模型
 
 | 模型 | 状态 | 说明 |
 |------|------|------|
-| 春 (Haru) | ✅ 内置 | 默认模型，8 种表情 |
+| 春 (Haru) | ✅ 内置 | 默认模型，8 种表情+情绪映射 |
 | 桃濑日和 (Hiyori) | ✅ 内置 | 物理模拟 + 眨眼 |
-| 虹色Mao | 📥 需下载 | 融合变形特效 |
-| 马克君 (Mark) | 📥 需下载 | 新手友好 |
-| 伊普西隆 (Epsilon) | 📥 需下载 | 表情特效 |
-| 雫 (Shizuku) | 📥 需下载 | 手势细腻 |
+| 虹色Mao | ✅ 内置 | 融合变形特效，8 种表情 |
+| 马克君 (Mark) | ✅ 内置 | 新手友好，物理模拟 |
+| ナトリ (Natori) | ✅ 内置 | 6种情绪表达 + 物理模拟 |
+| 米 (Rice) | ✅ 内置 | 简洁可爱，物理模拟 |
 
-未安装模型会在选择器中标记"未安装"，不影响使用。从 [Live2D 官网](https://www.live2d.com/en/learn/sample/) 下载免费模型后放入 `desktop_pet/frontend/public/models/` 即可。
+所有 6 款模型均已内置，开箱即用。模型来自 [Live2D Cubism SDK](https://www.live2d.com/en/learn/sample/) 免费素材（Free Material License Agreement）。
 
 ## 🛠️ 技术栈
 
@@ -175,7 +178,7 @@ python -m potato
 | 桌面壳 | Electron 28 |
 | 前端 | Vite + React + Live2D |
 | 后端 | Python + FastAPI + WebSocket |
-| 大模型 | DeepSeek / SiliconFlow / Liner / OpenAI (4层故障转移) |
+| 大模型 | DeepSeek / SiliconFlow / Liner / Base44 Agent / OpenAI (5层故障转移) |
 | 数据库 | SQLite (本地) / CockroachDB (云端) |
 | 加密 | Fernet(AES-128-CBC+HMAC-SHA256) (cryptography) |
 | 通知 | Telegram / 飞书 / 钉钉 |
@@ -205,9 +208,9 @@ a-stock-desktop-pet/
 │   │   ├── analyzer.py    # AI 选股引擎 + 技术指标
 │   │   ├── executor.py    # 交易执行器
 │   │   ├── journal.py     # 专业复盘系统
-│   │   └── risk.py        # 12 条风控规则
+│   │   └── risk.py        # 13 条风控规则（含止损门控）
 │   ├── intel.py           # 资讯抓取 (Google News RSS)
-│   ├── llm.py             # 4 层 LLM 故障转移
+│   ├── llm.py             # 5 层 LLM 故障转移
 │   ├── vault.py            # Fernet(AES-128-CBC+HMAC-SHA256) 密钥保险箱
 │   └── ...
 ├── schema/                # 数据库 Schema
