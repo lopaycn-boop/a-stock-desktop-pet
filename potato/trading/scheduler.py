@@ -70,9 +70,9 @@ class TradingScheduler:
     6. POST_MARKET (15:10): Full daily review
     """
 
-    def __init__(self, send_func=None):
+    def __init__(self, send_func=None, broker=None):
         self.send_func = send_func
-        self.executor = TradeExecutor(send_func)
+        self.executor = TradeExecutor(send_func, broker=broker)
         self.journal = TradeJournal()
         self._running = False
         self._task = None

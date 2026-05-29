@@ -45,6 +45,7 @@ from db_plugin import init_db, health_check
 from bytebot_client import get_bytebot_client, BytebotClient
 from potato.trading.scheduler import TradingScheduler
 from potato.trading.journal import TradeJournal
+from potato.trading.executor import TradeExecutor
 from potato.trading.analyzer import deep_analysis, fetch_realtime_quote, format_trade_decision_for_pet, format_trade_signal_message
 
 logging.basicConfig(
@@ -56,6 +57,7 @@ logger = logging.getLogger("potato.pet")
 
 _startup_time = time.time()
 _trading_scheduler = None
+_broker_instance = None
 _spawned_tasks: set = set()
 
 
@@ -65,6 +67,14 @@ def _spawn(coro):
     _spawned_tasks.add(task)
     task.add_done_callback(_spawned_tasks.discard)
     return task
+
+
+def _get_broker():
+    global _broker_instance
+    if _broker_instance is None:
+        from potato.trading.broker import BrokerAdapter
+        _broker_instance = BrokerAdapter()
+    return _broker_instance
 
 _WS_TOKEN = os.getenv("PET_WS_TOKEN", "")  # Set PET_WS_TOKEN env var for production!
 _RATE_LIMIT_WINDOW = 5.0
@@ -113,7 +123,8 @@ async def lifespan(app: FastAPI):
         now_bjt = datetime.now(tz=timezone(timedelta(hours=8)))
         if now_bjt.weekday() < 5:
             _trading_scheduler = TradingScheduler(
-                lambda e, d: asyncio.create_task(_broadcast_event(e, d))
+                lambda e, d: asyncio.create_task(_broadcast_event(e, d)),
+                broker=_get_broker(),
             )
             _trading_scheduler.start()
             logger.info("Auto-started trading scheduler (weekday, BJT %s)", now_bjt.strftime("%H:%M"))
@@ -233,6 +244,13 @@ class PotatoPetBrain:
             except Exception:
                 logger.debug("credentials unavailable")
 
+            try:
+                broker = _get_broker()
+                mode_label = "实盘" if broker.is_live else "模拟"
+                lines.append(f"当前交易模式: {mode_label} ({broker.mode})")
+            except Exception:
+                pass
+
             if self.last_analysis:
                 a = self.last_analysis.get("analysis", {})
                 if a.get("action_plan"):
@@ -280,6 +298,13 @@ class PotatoPetBrain:
 - 用户给了平台账号密码 → 存入凭证插件 → 小土豆自主登录+全权操盘（自主模式）
 - 用户没给密码 → 小土豆打开登录页等用户手动登录 → 登录后接管操盘（协助模式）
 - 用户随时可以收回密码（撤销权限）→ 切回协助模式
+
+交易模式：
+- dry_run（模拟模式，默认）：所有交易仅模拟，不下真实订单，适合验证策略
+- live（实盘模式）：通过券商客户端下单，需要券商桌面APP已登录
+- 用户可通过聊天说"切换到实盘模式"或"切换到模拟模式"
+- 用户可通过前端"🔀 模式"按钮切换
+- 用户可通过"💹 余额"查询账户余额和持仓
 
 选股分析规则：
 - 每只股票必须给出技术面信号+基本面逻辑+消息面关联 三层理由
@@ -338,7 +363,9 @@ class PotatoPetBrain:
         "trade_review": null,
         "close_position": null,
         "position_status": null,
-        "review_history": null
+        "review_history": null,
+        "broker_switch": null,
+        "broker_balance": null
     }}
 }}
 
@@ -1257,6 +1284,19 @@ async def _process_ai_actions(actions: dict, send_func):
         if actions.get("trade_auto_start"):
             await _emit_step(send_func, "trade_auto_start", "running", "启动自动操盘")
             _spawn(handle_trade_auto_start({}, send_func))
+
+        if actions.get("broker_switch"):
+            target = str(actions["broker_switch"]).strip().lower()
+            if target in ("live", "实盘", "实盘模式"):
+                await _emit_step(send_func, "broker_switch", "running", "切换到实盘模式")
+                _spawn(handle_broker_switch({"mode": "live"}, send_func))
+            elif target in ("dry_run", "模拟", "模拟模式", "dry"):
+                await _emit_step(send_func, "broker_switch", "running", "切换到模拟模式")
+                _spawn(handle_broker_switch({"mode": "dry_run"}, send_func))
+
+        if actions.get("broker_balance"):
+            await _emit_step(send_func, "broker_balance", "running", "查询账户余额")
+            _spawn(handle_broker_balance(send_func))
 
     except Exception as e:
         logger.warning("Action processing error: %s", e)
@@ -2228,7 +2268,7 @@ async def handle_bytebot_message(payload: dict, send_func):
 async def handle_trade_analysis(payload: dict, send_func):
     global _trading_scheduler
     if not _trading_scheduler:
-        _trading_scheduler = TradingScheduler(send_func)
+        _trading_scheduler = TradingScheduler(send_func, broker=_get_broker())
     symbols = payload.get("symbols", [])
     if not symbols:
         from potato.user_prefs import UserPrefs
@@ -2283,7 +2323,7 @@ async def handle_trade_analysis(payload: dict, send_func):
 async def handle_trade_execute(payload: dict, send_func):
     global _trading_scheduler
     if not _trading_scheduler:
-        _trading_scheduler = TradingScheduler(send_func)
+        _trading_scheduler = TradingScheduler(send_func, broker=_get_broker())
     pick = payload.get("pick", {})
     if not pick:
         await send_func("error", {"info": "需要交易信息(pick)"})
@@ -2322,7 +2362,7 @@ async def handle_trade_auto_start(payload: dict, send_func):
         _trading_scheduler.send_func = send_func
         await send_func("trade_auto_status", {"running": True, "status": _trading_scheduler.get_status()})
         return
-    _trading_scheduler = TradingScheduler(send_func)
+    _trading_scheduler = TradingScheduler(send_func, broker=_get_broker())
     _trading_scheduler.start()
     await send_func("trade_auto_status", {"running": True, "status": _trading_scheduler.get_status()})
     await send_reply("自动操盘已启动！我会按盘前→开盘→午间→尾盘→盘后流程自动运转 🥔📈", "happy", send_func)
@@ -2487,10 +2527,10 @@ async def handle_review_history(payload: dict, send_func):
 
 async def handle_broker_status(send_func):
     try:
-        from potato.trading.broker import BrokerAdapter
-        broker = BrokerAdapter()
+        broker = _get_broker()
         health = await broker.health_check()
         balance = await broker.get_balance()
+        _broker_instance = broker
         await send_func("broker_status", {
             "mode": broker.mode,
             "is_live": broker.is_live,
@@ -2508,11 +2548,14 @@ async def handle_broker_status(send_func):
 
 
 async def handle_broker_switch(payload: dict, send_func):
+    global _broker_instance, _trading_scheduler
     try:
-        from potato.trading.broker import BrokerAdapter
+        broker = _get_broker()
         target_mode = str(payload.get("mode", "dry_run")).lower()
-        broker = BrokerAdapter()
         result = await broker.switch_mode(target_mode)
+        _broker_instance = broker
+        if _trading_scheduler:
+            _trading_scheduler.executor = TradeExecutor(_trading_scheduler.send_func, broker=broker)
         if result.get("ok"):
             mode_cn = "实盘" if result["mode"] == "live" else "模拟"
             await send_func("broker_switch", {
@@ -2536,8 +2579,7 @@ async def handle_broker_switch(payload: dict, send_func):
 
 async def handle_broker_balance(send_func):
     try:
-        from potato.trading.broker import BrokerAdapter
-        broker = BrokerAdapter()
+        broker = _get_broker()
         balance = await broker.get_balance()
         positions = await broker.get_positions()
         pos_summary = []
