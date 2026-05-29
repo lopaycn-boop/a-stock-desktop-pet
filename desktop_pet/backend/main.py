@@ -66,6 +66,7 @@ _trading_scheduler = None
 _broker_instance = None
 _billing = BillingManager()
 _spawned_tasks: set = set()
+active_websockets: list = []
 
 
 def _spawn(coro):
@@ -640,6 +641,7 @@ async def websocket_endpoint(websocket: WebSocket):
             return
 
     await websocket.accept()
+    active_websockets.append(websocket)
     logger.info("桌宠 WebSocket 连接建立 from %s", client_host)
 
     async def send_to_frontend(type_str, payload):
@@ -917,11 +919,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("桌宠 WebSocket 断开连接")
+        if websocket in active_websockets:
+            active_websockets.remove(websocket)
         for t in list(_spawned_tasks):
             if not t.done():
                 t.cancel()
     except Exception as e:
         logger.warning("WebSocket error: %s", e)
+        if websocket in active_websockets:
+            active_websockets.remove(websocket)
         for t in list(_spawned_tasks):
             if not t.done():
                 t.cancel()

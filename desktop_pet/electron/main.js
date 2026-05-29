@@ -468,6 +468,26 @@ app.whenReady().then(async () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('system-event', { type: 'backend_timeout' });
     }
+  } else {
+    // Run verification check
+    try {
+      const verifyReq = http.get(`http://127.0.0.1:${BACKEND_PORT}/verify`, (vRes) => {
+        let body = '';
+        vRes.on('data', (d) => body += d);
+        vRes.on('end', () => {
+          try {
+            const v = JSON.parse(body);
+            if (v.ok) {
+              console.log(`[electron] Verify: all checks passed`);
+            } else {
+              console.warn(`[electron] Verify: some checks failed — ${v.output}`);
+            }
+          } catch(e) {}
+        });
+      });
+      verifyReq.on('error', () => {});
+      verifyReq.end();
+    } catch(e) {}
   }
 
   // Start Bytebot Agent
