@@ -385,7 +385,14 @@ class PotatoPetBrain:
         "billing_dashboard": null,
         "billing_topup": null,
         "billing_renewal_payment": null,
-        "billing_confirm_payment": null
+        "billing_confirm_payment": null,
+        "em_query": null,
+        "em_hotspot": false,
+        "em_sentiment": null,
+        "realtime_quote": null,
+        "stock_changes": false,
+        "hot_tables": false,
+        "chip_distribution": null
     }}
 }}
 
@@ -425,6 +432,43 @@ class PotatoPetBrain:
 25. 清理前必须告知用户将做什么操作，得到确认后才执行，绝不能静默删除用户文件
 26. 清理只针对系统临时目录、浏览器缓存、回收站等安全目标，绝不删除用户文档、图片、桌面文件
 27. 用户说"分析XX股票/选股/看盘" → trade_analysis=["代码1","代码2"]或trade_analysis="600519,000858"
+28. 用户说"买入/卖出XX" → trade_execute={{"symbol":"代码","name":"名称","action":"BUY/SELL","confidence":0.8,"reasoning":"理由","entry_price":"价格","target_price":"目标价","stop_loss":"止损价"}}
+29. 【自主操盘】操盘调度器在交易日自动启动，4个阶段全自动运行：
+    - 盘前扫描(9:00) → AI自动抓新闻+筛选标的
+    - 开盘分析(9:25) → AI深度分析+自动执行交易（通过风控后直接下单）
+    - 午间复盘(11:30) → AI检查持仓+自动止损止盈
+    - 盘后复盘(15:10) → AI做当日复盘+总结
+    用户不需要说"开始操盘"，系统自动运行。用户只需在第一次使用时确认资金金额。
+30. 用户说"停止操盘" → trade_auto_stop，但默认是自动启动的
+31. 选股必须三层逻辑：技术面信号 + 消息面关联 + 基本面估值
+32. 每次交易执行前必须通过风控检查——止损价不设不通过
+33. 【唯一人控项】资金金额由用户决定：
+    - 第一次使用时系统会问用户"你要投入多少钱？单笔最多多少？"
+    - 用户说多少就是多少，不设上限——想买1万就1万，想买100万就100万
+    - 确认后系统记住，每天沿用，用户随时可以改
+    - 止损/止盈比例由AI根据市场波动自动设置（默认止损5%/止盈10%）
+    - 用户说"保守点/激进点" → update_risk={{"risk_level":"conservative/moderate/aggressive","risk_confirmed":true}}
+34. 风控未确认时只禁止交易执行，不禁止分析和复盘
+35. 每日开盘严格流程——不可跳过任何步骤：
+    - 9:00 盘前扫描（新闻、隔夜行情、持仓检查）
+    - 9:10 确认今日风控参数（问用户，10分钟超时沿用昨日）
+    - 9:25 开盘分析（AI选股+三层逻辑）
+    - 9:30-15:00 盘中监控（止盈止损实时盯盘）
+    - 11:30 午间复盘（持仓检查+警报）
+    - 14:30 尾盘评估（操作建议）
+    - 15:10 盘后深度复盘（胜率/盈亏比/AI反思）
+36. 用户说"复盘/看看今天交易/交易记录" → trade_review={{"date":"今天日期"}}
+37. 用户说"持仓情况/还持有什么" → position_status=true
+38. 用户说"平仓XX/卖掉XX/止盈/止损XX" → close_position={{"trade_id":"从position_status获取","exit_price":"0(自动获取)","reason":"用户说的原因"}}
+39. 每次平仓后，系统自动记录P&L、预测对错、止盈止损是否触发
+40. 盘后复盘必须包含：胜率、盈亏比、最大回撤、逐笔对错分析、AI改进建议
+41. 用户说"异动股/哪些股票异动" → stock_changes=true（查看A股异动监控）
+42. 用户说"龙虎榜/机构买卖" → hot_tables=true（查看龙虎榜数据）
+43. 用户说"XX股票筹码分布" → chip_distribution="股票代码"（查看持仓成本分布）
+44. 用户说"市场情绪/情绪分析" → em_sentiment="要分析的文本或关键词"（金融情感分析）
+45. 用户说"东方财富问XX/智能问答" → em_query="问题内容"（东方财富AI金融问答）
+46. 用户说"热点板块/热门概念" → em_hotspot=true（热点发现）
+47. 用户说"XX股票实时行情/现在多少钱" → realtime_quote="股票代码"
 28. 用户说"买入/卖出XX" → trade_execute={{"symbol":"代码","name":"名称","action":"BUY/SELL","confidence":0.8,"reasoning":"理由","entry_price":"价格","target_price":"目标价","stop_loss":"止损价"}}
 29. 【自主操盘】操盘调度器在交易日自动启动，4个阶段全自动运行：
     - 盘前扫描(9:00) → AI自动抓新闻+筛选标的
@@ -795,6 +839,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "realtime_quote":
                 await handle_realtime_quote(payload, send_to_frontend)
+
+            elif msg_type == "em_query":
+                await handle_em_query(payload, send_to_frontend)
+
+            elif msg_type == "em_hotspot":
+                await handle_em_hotspot(send_to_frontend)
+
+            elif msg_type == "em_sentiment":
+                await handle_em_sentiment(payload, send_to_frontend)
 
             else:
                 logger.warning("Unknown msg_type from frontend: %s", msg_type)
@@ -1413,6 +1466,38 @@ async def _process_ai_actions(actions: dict, send_func):
         if actions.get("billing_confirm_payment"):
             await _emit_step(send_func, "billing_confirm_payment", "running", "确认付款")
             _spawn(handle_billing_confirm_payment(actions, send_func))
+
+        if actions.get("em_query"):
+            question = str(actions["em_query"])[:500]
+            await _emit_step(send_func, "em_query", "running", f"东方财富问答: {question[:30]}")
+            _spawn(handle_em_query({"question": question}, send_func))
+
+        if actions.get("em_hotspot"):
+            await _emit_step(send_func, "em_hotspot", "running", "发现热门板块")
+            _spawn(handle_em_hotspot(send_func))
+
+        if actions.get("em_sentiment"):
+            text = str(actions["em_sentiment"])[:1000] if actions["em_sentiment"] else "A股市场"
+            await _emit_step(send_func, "em_sentiment", "running", "情绪分析中")
+            _spawn(handle_em_sentiment({"text": text}, send_func))
+
+        if actions.get("realtime_quote"):
+            symbol = str(actions["realtime_quote"]).strip()[:10]
+            await _emit_step(send_func, "realtime_quote", "running", f"查询{symbol}行情")
+            _spawn(handle_realtime_quote_ai({"symbol": symbol}, send_func))
+
+        if actions.get("stock_changes"):
+            await _emit_step(send_func, "stock_changes", "running", "异动监控中")
+            _spawn(handle_stock_changes_ai(send_func))
+
+        if actions.get("hot_tables"):
+            await _emit_step(send_func, "hot_tables", "running", "龙虎榜查询中")
+            _spawn(handle_hot_tables_ai(send_func))
+
+        if actions.get("chip_distribution"):
+            symbol = str(actions["chip_distribution"]).strip()[:10]
+            await _emit_step(send_func, "chip_distribution", "running", f"筹码分布: {symbol}")
+            _spawn(handle_chip_distribution_ai({"symbol": symbol}, send_func))
 
     except Exception as e:
         logger.warning("Action processing error: %s", e)
@@ -3158,5 +3243,115 @@ async def handle_realtime_quote(payload: dict, send_func):
     try:
         quote = get_realtime_quote(stock_code)
         await send_func("realtime_quote", quote)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_em_query(payload: dict, send_func):
+    question = payload.get("question", "")
+    if not question:
+        await send_func("error", {"info": "请输入问题"})
+        return
+    try:
+        client = _em_client()
+        result = client.financial_qa(question)
+        content = result if isinstance(result, str) else str(result)
+        await send_func("em_financial_qa", {"question": question, "content": content or "暂无数据"})
+        await send_reply(f"📊 东方财富问答: {content[:300]}", "happy", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_em_hotspot(send_func):
+    try:
+        client = _em_client()
+        result = client.hotspot_discovery("")
+        content = result if isinstance(result, str) else str(result)
+        await send_func("em_hotspot_discovery", {"content": content or "暂无数据"})
+        await send_reply(f"🔥 热点板块: {content[:300]}", "happy", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_em_sentiment(payload: dict, send_func):
+    text = payload.get("text", "")
+    if not text:
+        text = "A股市场"
+    try:
+        result = analyze_sentiment(text)
+        await send_func("sentiment_analysis", result)
+        emoji = {"看涨": "🟢", "看跌": "🔴"}.get(result.get("category", ""), "⚪")
+        summary = f"{emoji} 市场情绪: {result['category']} (得分 {result['score']:.1f})"
+        if result.get("positive_words"):
+            top_pos = [w for w, _ in result["positive_words"][:3]]
+            summary += f"\n正面: {', '.join(top_pos)}"
+        if result.get("negative_words"):
+            top_neg = [w for w, _ in result["negative_words"][:3]]
+            summary += f"\n负面: {', '.join(top_neg)}"
+        await send_reply(summary, "happy" if result.get("category") == "看涨" else "angry" if result.get("category") == "看跌" else "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_realtime_quote_ai(payload: dict, send_func):
+    symbol = payload.get("symbol", "")
+    if not symbol:
+        await send_func("error", {"info": "请提供股票代码"})
+        return
+    try:
+        quote = get_realtime_quote(symbol)
+        await send_func("realtime_quote", quote)
+        if quote and quote.get("name"):
+            chg = quote.get("change_pct", 0)
+            emoji = "📈" if chg >= 0 else "📉"
+            await send_reply(
+                f"{emoji} {quote['name']}({symbol}): ¥{quote.get('price', 'N/A')} {chg:+.2f}%",
+                "happy" if chg >= 0 else "angry",
+                send_func,
+            )
+        else:
+            await send_reply(f"未找到 {symbol} 的行情数据", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_stock_changes_ai(send_func):
+    try:
+        changes = get_stock_changes()
+        await send_func("stock_changes", {"changes": changes, "count": len(changes)})
+        if changes:
+            top5 = changes[:5]
+            lines = [f"  {c.get('name', '?')}({c.get('code', '?')}): {c.get('type', '?')}" for c in top5]
+            await send_reply(f"📈 异动监控: 发现{len(changes)}只异动股\n" + "\n".join(lines), "neutral", send_func)
+        else:
+            await send_reply("暂无异动股票", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_hot_tables_ai(send_func):
+    try:
+        tables = get_hot_tables()
+        await send_func("hot_tables", {"data": tables})
+        if tables:
+            await send_reply(f"🀄 龙虎榜: 今日{len(tables)}只个股上榜", "neutral", send_func)
+        else:
+            await send_reply("今日龙虎榜暂无数据", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_chip_distribution_ai(payload: dict, send_func):
+    symbol = payload.get("symbol", "")
+    if not symbol:
+        await send_func("error", {"info": "请提供股票代码"})
+        return
+    try:
+        data = get_chip_distribution(symbol)
+        await send_func("chip_distribution", {"stock_code": symbol, "data": data})
+        if data:
+            await send_reply(f"📊 {symbol} 筹码分布已获取", "neutral", send_func)
+        else:
+            await send_reply(f"{symbol} 筹码数据暂无", "neutral", send_func)
     except Exception as e:
         await send_func("error", {"info": _safe_error(e)})

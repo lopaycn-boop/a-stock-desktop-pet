@@ -685,6 +685,16 @@ case 'billing_renewal_payment': {
         }
         break;
       }
+      case 'em_query': {
+        const answer = payload?.content || payload?.answer || '暂无回答';
+        setMessages(prev => [...prev, { type: 'system', content: `🤖 ${answer}` }]);
+        break;
+      }
+      case 'em_hotspot': {
+        const hotspotData = payload?.content || payload?.data || '暂无热点数据';
+        setMessages(prev => [...prev, { type: 'system', content: `🔥 热点板块: ${typeof hotspotData === 'string' ? hotspotData.substring(0, 200) : '已获取'}` }]);
+        break;
+      }
       default:
         break;
     }

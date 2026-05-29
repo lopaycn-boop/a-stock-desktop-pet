@@ -30,6 +30,13 @@ import httpx
 
 from potato.config import load_settings
 from potato.llm import chat, research, analyze
+from potato.eastmoney import (
+    EastMoneyClient,
+    analyze_sentiment,
+    get_stock_changes,
+    get_hot_tables,
+    get_realtime_quote as em_get_realtime_quote,
+)
 
 logger = logging.getLogger("potato.trading.analyzer")
 
@@ -304,6 +311,48 @@ def _build_technical_context(klines: list[dict], quote: dict | None) -> str:
     return "\n".join(lines)
 
 
+async def _gather_eastmoney_context(symbols: list[str]) -> str:
+    """Gather EastMoney AI SaaS data for analysis enrichment."""
+    blocks = []
+    em = EastMoneyClient()
+
+    try:
+        for symbol in symbols[:5]:
+            q = await asyncio.to_thread(em_get_realtime_quote, symbol)
+            if q and q.get("name"):
+                em_chg = q.get("change_pct", 0)
+                blocks.append(
+                    f"- {q['name']}({symbol}): ¥{q.get('price', 'N/A')} "
+                    f"涨跌{em_chg:+.2f}% 成交额{q.get('volume', 'N/A')}"
+                )
+    except Exception:
+        pass
+
+    try:
+        changes = await asyncio.to_thread(get_stock_changes)
+        if changes:
+            hot = [c for c in changes[:10] if c.get("name")]
+            if hot:
+                blocks.append("\n异动监控:")
+                for c in hot:
+                    blocks.append(f"- {c.get('name', '?')}({c.get('code', '?')}): {c.get('type', '?')} {c.get('desc', '')}")
+    except Exception:
+        pass
+
+    try:
+        hot_data = await asyncio.to_thread(get_hot_tables)
+        if hot_data:
+            items = hot_data[:8]
+            if items:
+                blocks.append("\n龙虎榜:")
+                for h in items:
+                    blocks.append(f"- {h.get('name', '?')}({h.get('code', '?')}): 买入{h.get('buy', '?')} 卖出{h.get('sell', '?')}")
+    except Exception:
+        pass
+
+    return "\n".join(blocks) if blocks else ""
+
+
 async def deep_analysis(
     symbols: list[str],
     user_prefs: dict[str, Any] | None = None,
@@ -331,6 +380,28 @@ async def deep_analysis(
             kline_data[symbol] = klines
             tech_contexts[symbol] = _build_technical_context(klines, quote)
 
+    em_context = ""
+    try:
+        em_context = await _gather_eastmoney_context(symbols)
+    except Exception as e:
+        logger.warning("EastMoney context gathering failed: %s", e)
+
+    news_text = " ".join(
+        n.get("title", "") + " " + (n.get("summary", "") or "")
+        for n in (news_items or [])[:10]
+    )
+    sentiment_block = ""
+    if news_text.strip():
+        try:
+            sent = await asyncio.to_thread(analyze_sentiment, news_text)
+            sentiment_block = (
+                f"市场情绪: {sent['category']} (得分{sent['score']:.1f})\n"
+                f"正面词: {', '.join(w for w, _ in sent.get('positive_words', [])[:5])}\n"
+                f"负面词: {', '.join(w for w, _ in sent.get('negative_words', [])[:5])}"
+            )
+        except Exception:
+            sentiment_block = ""
+
     news_block = ""
     if news_items:
         news_block = "\n".join(
@@ -355,6 +426,18 @@ async def deep_analysis(
 
     stocks_text = "\n\n".join(stock_analysis_blocks) if stock_analysis_blocks else "（无实时数据）"
 
+    em_block = ""
+    if em_context:
+        em_block = f"""## 东方财富实时数据
+{em_context}
+"""
+
+    sentiment_section = ""
+    if sentiment_block:
+        sentiment_section = f"""## 市场情绪分析
+{sentiment_block}
+"""
+
     prompt = f"""你是「小土豆」AI 操盘手，现在进行深度选股分析。
 
 ## 用户配置
@@ -363,7 +446,7 @@ async def deep_analysis(
 - 关注板块: {', '.join(sectors) or '未设置'}
 - 平台: {platform_names}
 
-## 实时行情与技术指标
+{em_block}{sentiment_section}## 实时行情与技术指标
 {stocks_text}
 
 ## 最新资讯
@@ -451,6 +534,8 @@ async def deep_analysis(
                     "quotes": len(quote_data),
                     "klines": len(kline_data),
                     "news": len(news_items) if news_items else 0,
+                    "eastmoney": bool(em_context),
+                    "sentiment": bool(sentiment_block),
                 },
             }
             return {"ok": True, "analysis": analysis}

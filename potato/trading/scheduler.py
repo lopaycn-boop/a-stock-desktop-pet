@@ -26,6 +26,13 @@ from potato.trading.analyzer import (
     format_trade_decision_for_pet,
     format_trade_signal_message,
 )
+from potato.eastmoney import (
+    EastMoneyClient,
+    analyze_sentiment,
+    get_stock_changes,
+    get_hot_tables,
+    get_realtime_quote as em_get_realtime_quote,
+)
 from potato.trading.executor import TradeDecision, TradeExecutor
 from potato.trading.journal import TradeJournal
 from potato.risk import RiskValidator, RiskState, TradeRequest, SAFETY_RULES
@@ -287,6 +294,35 @@ class TradingScheduler:
         except Exception as e:
             logger.warning("Pre-market news fetch failed: %s", e)
 
+        em_summary = ""
+        try:
+            changes = await asyncio.to_thread(get_stock_changes)
+            if changes:
+                top_changes = changes[:5]
+                em_summary = f"，{len(changes)}只异动股"
+                change_msgs = [f"{c.get('name','?')}({c.get('code','?')}): {c.get('type','?')}" for c in top_changes]
+                await self._emit("stock_changes", {"changes": changes[:20], "count": len(changes)})
+                await self._emit_step("pre_market", "running", f"异动监控: {', '.join(change_msgs[:3])}")
+        except Exception as e:
+            logger.warning("Pre-market stock changes fetch failed: %s", e)
+
+        try:
+            hot_data = await asyncio.to_thread(get_hot_tables)
+            if hot_data:
+                await self._emit("hot_tables", {"data": hot_data[:10]})
+        except Exception:
+            pass
+
+        try:
+            news_text = " ".join(n.get("title", "") for n in (news_items or [])[:8])
+            if news_text.strip():
+                sent = await asyncio.to_thread(analyze_sentiment, news_text)
+                await self._emit("sentiment_analysis", sent)
+                sentiment_emoji = {"看涨": "🟢", "看跌": "🔴"}.get(sent.get("category", ""), "⚪")
+                em_summary += f"，情绪{sentiment_emoji}{sent['category']}({sent['score']:.1f})"
+        except Exception:
+            pass
+
         result = await self.run_manual_analysis(
             symbols=symbols,
             user_prefs=all_prefs,
@@ -295,7 +331,7 @@ class TradingScheduler:
 
         analysis = result.get("analysis", {}) if result.get("ok") else {}
         picks = analysis.get("stock_picks", [])
-        summary = f"盘前扫描完成：{len(symbols)}只自选股，{len(news_items or [])}条资讯"
+        summary = f"盘前扫描完成：{len(symbols)}只自选股，{len(news_items or [])}条资讯{em_summary}"
         if picks:
             buy_signals = [p for p in picks if p.get("action") == "BUY" and p.get("confidence", 0) >= 0.65]
             summary += f"，{len(buy_signals)}只买入信号"
@@ -333,6 +369,21 @@ class TradingScheduler:
             await self._emit_step("open_analysis", "running", f"获取到{news_count}条资讯，开始分析{len(symbols)}只股票...")
         except Exception as e:
             logger.warning("News fetch failed: %s", e)
+
+        try:
+            changes = await asyncio.to_thread(get_stock_changes)
+            if changes:
+                await self._emit("stock_changes", {"changes": changes[:20], "count": len(changes)})
+        except Exception:
+            pass
+
+        try:
+            news_text = " ".join(n.get("title", "") for n in news_items[:8])
+            if news_text.strip():
+                sent = await asyncio.to_thread(analyze_sentiment, news_text)
+                await self._emit("sentiment_analysis", sent)
+        except Exception:
+            pass
 
         result = await self.run_manual_analysis(
             symbols=symbols[:5],
