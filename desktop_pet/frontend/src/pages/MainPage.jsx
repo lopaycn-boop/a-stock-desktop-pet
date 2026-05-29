@@ -128,6 +128,8 @@ export default function MainPage() {
         setNeuroState('idle');
         break;
       case 'canceled':
+        setNeuroState('idle');
+        setMessages(prev => [...prev, { type: 'system', content: '⏹ 已取消' }]);
         break;
       case 'error':
         setMessages(prev => [...prev, { type: 'system', content: `❌ ${maskSecrets(payload.info)}` }]);
@@ -207,6 +209,14 @@ export default function MainPage() {
       case 'app_not_found': {
         const appName = payload.app_name || payload.platform_id || '应用';
         setMessages(prev => [...prev, { type: 'system', content: `⚠️ 未找到 ${appName}，正在尝试浏览器...` }]);
+        break;
+      }
+      case 'app_launch_result': {
+        const alr = payload || {};
+        const alrMsg = alr.ok
+          ? `🚀 已打开 ${alr.app_name || alr.platform_id || '应用'}`
+          : `⚠️ 打开失败: ${alr.error || alr.app_name || '未知'}`;
+        setMessages(prev => [...prev, { type: 'system', content: alrMsg }]);
         break;
       }
       case 'browser_opened': {
@@ -430,6 +440,8 @@ export default function MainPage() {
         break;
       }
       case 'schedule_step': {
+        const ss = payload || {};
+        setMessages(prev => [...prev, { type: 'system', content: `📅 ${ss.step || ss.name || '调度步骤完成'}` }]);
         break;
       }
       case 'trade_review': {
@@ -622,6 +634,13 @@ case 'billing_renewal_payment': {
         setMessages(prev => [...prev, { type: 'system', content: `可用语音: ${(payload?.voices || []).join(', ')}` }]);
         break;
       case 'user_prefs': {
+        if (payload && typeof payload === 'object') {
+          const risky = payload.risk_tolerance || payload.risk_mode || '';
+          const watchlist = (payload.watchlist || []).join(', ');
+          if (risky || watchlist) {
+            setMessages(prev => [...prev, { type: 'system', content: `⚙️ 偏好: ${risky ? `风控=${risky}` : ''}${watchlist ? ` 自选=${watchlist}` : ''}` }]);
+          }
+        }
         break;
       }
       default:
