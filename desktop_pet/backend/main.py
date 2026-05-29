@@ -1773,8 +1773,11 @@ async def handle_add_platform(payload: dict, send_func):
         from potato.browser.platforms import PlatformRegistry
 
         registry = PlatformRegistry()
-        pid = payload.get("platform_id", "")
-        cfg = registry.add_platform(pid, **{k: v for k, v in payload.items() if k != "platform_id"})
+        pid = str(payload.get("platform_id", "")).strip().lower()[:50]
+        if pid not in {"eastmoney", "tonghuashun", "xueqiu", "ths", "em"}:
+            await send_func("error", {"info": f"不支持的平台: {pid}"})
+            return
+        cfg = registry.add_platform(pid)
         await send_func("platform_added", {"platform_id": pid, "name": cfg.name})
         await send_reply(f"已添加 {cfg.name}！接下来帮你登录~ 🥔", "happy", send_func)
     except Exception as e:
