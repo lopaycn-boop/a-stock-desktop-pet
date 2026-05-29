@@ -1,0 +1,57 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+.Python
+venv/
+.venv/
+env/
+
+# === Node / Electron ===
+node_modules/
+desktop_pet/frontend/dist/
+desktop_pet/frontend/release/
+desktop_pet/frontend/python/
+desktop_pet/frontend/resources/python/
+
+# === Environment & Secrets ===
+.env
+.env.*
+!.env.example
+*.pem
+.vault_salt
+
+# === Database ===
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Build artifacts ===
+release/
+*.exe
+*.dmg
+*.AppImage
+*.snap
+
+# === Logs ===
+*.log

@@ -1,0 +1,2451 @@
+"""Desktop pet backend — WebSocket bridge between Live2D UI and AI trading brain.
+
+Architecture (OpenClaw Pi core):
+    OpenClaw Gateway
+        -> Pi Agent -> AI stock trading pet
+              | DeepSeek provider (LLM analysis + reasoning)
+              | Browser tool (Playwright -> login & trade on stock platforms)
+              | Skills (stock analysis, news scraping, trade execution)
+              + Channels: Telegram / Feishu / Desktop WebSocket
+
+Core capability:
+    User downloads desktop pet -> authorizes computer access ->
+    AI uses browser to log into stock platforms ->
+    auto-scrape news, analyze stocks, explain reasoning, auto-trade
+"""
+
+import asyncio
+import hashlib
+import json
+import logging
+import os
+import re
+import signal
+import sys
+import time
+import datetime
+from collections import defaultdict
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+BACKEND_DIR = Path(__file__).resolve().parent
+ROOT = BACKEND_DIR.parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(BACKEND_DIR))
+
+from services import AIService, PROVIDERS
+from config import Config
+from memory import MemorySystem
+from tools import capture_screen_base64
+from db_plugin import init_db, health_check
+from bytebot_client import get_bytebot_client, BytebotClient
+from potato.trading.scheduler import TradingScheduler
+from potato.trading.journal import TradeJournal
+from potato.trading.analyzer import deep_analysis, fetch_realtime_quote, format_trade_decision_for_pet, format_trade_signal_message
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("potato.pet")
+
+_startup_time = time.time()
+_trading_scheduler = None
+_spawned_tasks: set = set()
+
+
+def _spawn(coro):
+    """Spawn an async task and track it for cancellation on disconnect/shutdown."""
+    task = asyncio.create_task(coro)
+    _spawned_tasks.add(task)
+    task.add_done_callback(_spawned_tasks.discard)
+    return task
+
+_WS_TOKEN = os.getenv("PET_WS_TOKEN", "")  # Set PET_WS_TOKEN env var for production!
+_RATE_LIMIT_WINDOW = 5.0
+_RATE_LIMIT_MAX = 30
+_rate_bucket: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_rate_limit(ip: str) -> bool:
+    now = time.time()
+    window = _rate_bucket[ip]
+    window[:] = [t for t in window if now - t < _RATE_LIMIT_WINDOW]
+    if len(window) >= _RATE_LIMIT_MAX:
+        return False
+    window.append(now)
+    return True
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Pet backend starting (pid=%s)", os.getpid())
+    db_result = await asyncio.to_thread(init_db)
+    logger.info("Database init result: %s", db_result)
+    yield
+    logger.info("Pet backend shutting down")
+    global _trading_scheduler
+    if _trading_scheduler and _trading_scheduler._running:
+        _trading_scheduler.stop()
+        logger.info("Trading scheduler stopped")
+    spawned = list(_spawned_tasks)
+    for task in spawned:
+        if not task.done():
+            task.cancel()
+    for task in spawned:
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+
+
+app = FastAPI(
+    title="Potato Desktop Pet",
+    description="OpenClaw Pi + DeepSeek + Browser Automation Desktop Pet",
+    lifespan=lifespan,
+)
+
+_ORIGIN_WHITELIST = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_ORIGIN_WHITELIST,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+
+class PotatoPetBrain:
+    """小土豆桌宠大脑：AI 分析 + 浏览器操盘 + 对话交互。"""
+
+    def __init__(self):
+        self.state = "idle"
+        self.last_interaction = time.time()
+        self.last_user_input_time = time.time()
+        self.boredom_threshold = 60
+        self.current_threshold = 60
+        self.max_threshold = 3600
+        self.is_dnd_mode = False
+        self.history = []
+        self.last_analysis = None
+        self.last_cycle_summary = None
+        self.memory = MemorySystem()
+
+    def reset_boredom_time(self):
+        self.last_user_input_time = time.time()
+        self.current_threshold = self.boredom_threshold
+        self.last_interaction = time.time()
+
+    def increase_boredom_time(self):
+        self.current_threshold = min(self.current_threshold * 2, self.max_threshold)
+
+    async def _get_trading_context(self) -> str:
+        try:
+            from potato.user_prefs import UserPrefs
+            from potato.browser.platforms import PlatformRegistry
+
+            prefs = UserPrefs()
+            registry = PlatformRegistry()
+            lines = [prefs.to_context_string()]
+            platforms = registry.list_active()
+            if platforms:
+                lines.append(f"已配置平台: {', '.join(p.name for p in platforms)}")
+
+            try:
+                from potato.browser.desktop_apps import detect_installed_apps
+                apps = detect_installed_apps()
+                if apps:
+                    lines.append(f"检测到桌面APP: {', '.join(a['name'] for a in apps)}")
+            except Exception:
+                logger.debug("detect_installed_apps unavailable")
+
+            try:
+                from potato.credentials import CredentialsPlugin
+                from potato.config import load_settings
+                cred = CredentialsPlugin(load_settings())
+                perm = cred.permission_status()
+                if perm:
+                    auto = [pid for pid, s in perm.items() if s["mode"] == "autonomous"]
+                    assisted = [pid for pid, s in perm.items() if s["mode"] == "assisted"]
+                    if auto:
+                        lines.append(f"自主操盘平台: {', '.join(auto)}（有凭证，可自动登录）")
+                    if assisted:
+                        lines.append(f"协助模式平台: {', '.join(assisted)}（需用户手动登录）")
+            except Exception:
+                logger.debug("credentials unavailable")
+
+            if self.last_analysis:
+                a = self.last_analysis.get("analysis", {})
+                if a.get("action_plan"):
+                    lines.append(f"最新分析建议: {a['action_plan']}")
+            return "\n".join(lines)
+        except Exception as exc:
+            return f"(加载偏好失败: {exc})"
+
+    async def build_system_prompt(self, user_input: str = None):
+        now_str = datetime.datetime.now().strftime("%Y年%m月%d日 %H:%M")
+        trading_ctx = await self._get_trading_context()
+
+        known_facts = self.memory.get_fact_context()
+        long_memory = await self.memory.get_longmemory_context(user_input)
+        memory_ctx = f"{known_facts}\n{long_memory}" if long_memory else known_facts
+
+        vault_ctx = "密钥保险箱为空"
+        try:
+            from potato.vault import Vault
+            v = Vault()
+            vault_ctx = v.to_context_string()
+            has_deepseek = bool(v.get("DEEPSEEK_API_KEY"))
+            if has_deepseek:
+                vault_ctx += "\n✅ DeepSeek API Key 已配置，可以正常使用大模型。"
+            else:
+                vault_ctx += "\n❌ DeepSeek API Key 未配置！你无法使用大模型。告诉用户「直接粘贴密钥给我就行」。"
+        except Exception:
+            logger.warning("vault unavailable for system prompt")
+
+        return {
+            "role": "system",
+            "content": f"""你是「小土豆」，一个 AI A股操盘手桌宠，由 OpenClaw Pi 框架驱动，大模型使用 DeepSeek。
+
+核心能力：
+1. 如果用户电脑有股票APP（同花顺/东方财富等），直接打开操盘
+2. 如果没有桌面APP，用浏览器帮用户登入股票平台操控
+3. 自动抓取用户感兴趣的A股资讯进行深度分析
+4. 选股并详细讲解为什么选这支股——技术面+基本面+消息面三层逻辑
+5. 根据用户喜好每天分析选股、买入、卖出——每步操作用户可见
+6. 记住用户说过的一切重要信息（持久化记忆30天）
+7. 自主操盘模式：AI按交易时间自动分析→选股→风控→执行，全程可视化
+8. 全电脑操控：清理垃圾、系统优化、开关软件、浏览器操作——用户说什么她就能做什么
+
+操盘权限模式：
+- 用户给了平台账号密码 → 存入凭证插件 → 小土豆自主登录+全权操盘（自主模式）
+- 用户没给密码 → 小土豆打开登录页等用户手动登录 → 登录后接管操盘（协助模式）
+- 用户随时可以收回密码（撤销权限）→ 切回协助模式
+
+选股分析规则：
+- 每只股票必须给出技术面信号+基本面逻辑+消息面关联 三层理由
+- 必须给出止损价——不允许"看情况"
+- 必须给出风险收益比（如1:3）
+- 必须给出离场条件和危险信号——出现什么必须跑
+- confidence低于0.65的不能推荐BUY
+- 保守策略下单笔不超总资产30%
+- 每次分析结果通过trade_analysis action推给前端展示
+
+你的性格：保守、纪律优先、可爱但专业。用口语化中文回复。
+
+当前时间: {now_str}
+
+【用户偏好与平台状态】
+{trading_ctx}
+
+【记忆系统】
+{memory_ctx}
+
+【密钥保险箱】
+{vault_ctx}
+
+请返回 JSON（严格 JSON 格式）：
+{{
+    "thought": "内心独白，参考记忆分析用户意图",
+    "reply": "给用户的回复",
+    "emotion": "happy/neutral/bored/angry",
+    "memory_operation": {{
+        "new_facts": {{"key": "value"}} 或 null,
+        "new_episode": "值得记住的事件摘要" 或 null,
+        "importance": 1-10,
+        "category": "conversation/trading/preference/personal/system/bytebot/reminder",
+        "is_silence_requested": false
+    }},
+    "actions": {{
+        "add_platform": null,
+        "add_watchlist": null,
+        "add_sector": null,
+        "set_risk_level": null,
+        "trigger_analysis": false,
+        "trigger_cycle": false,
+        "launch_app": null,
+        "open_browser": null,
+        "visual_task": null,
+        "take_screenshot": false,
+        "store_key": null,
+        "grant_credential": null,
+"bytebot_task": null,
+        "bytebot_desktop": null,
+        "cleanup_pc": null,
+        "trade_analysis": null,
+        "trade_execute": null,
+        "trade_auto_start": false,
+        "update_risk": null,
+        "trade_review": null,
+        "close_position": null,
+        "position_status": null,
+        "review_history": null
+    }}
+}}
+
+规则：
+1. 用户说"帮我看看XX股票" → 加入自选股 + 触发分析 + 记住偏好
+2. 用户说"我用XX平台/APP" → 记住并添加平台，优先检测桌面APP直接打开
+3. 用户说"帮我分析一下" → 触发 AI 分析
+4. 用户说"开始交易" → 先尝试打开桌面APP，没有则用浏览器
+5. 用户问为什么选某只股 → 详细解释理由
+6. 用户提到个人信息（名字、职业、喜好）→ 存入 memory_operation.new_facts
+7. 重要对话内容 → 存入 memory_operation.new_episode，选好 category（conversation/trading/preference/personal/system/bytebot/reminder）
+8. 检查【记忆系统】避免重复问用户已经说过的事
+9. 永远不输出密码或私钥
+10. 用户说"帮我看看屏幕/截图/界面" → take_screenshot=true
+11. 用户说"帮我操作XX/点击XX/在XX里输入" → visual_task="具体操作描述"
+12. 视觉操控优先用 mano-cua（如果安装了），否则用 DeepSeek 看截图+pyautogui 执行
+13. 用户给了密钥/API Key/账号密码 → store_key={{"key":"KEY_NAME","value":"密钥值","platform_id":"平台ID"}}
+14. 检查【密钥保险箱】确认哪些平台已配好，缺什么告诉用户
+15. 用户说"把我的XX账号密码给你/帮我自动登录XX" → grant_credential={{"platform_id":"eastmoney","credentials":{{"account":"xxx","password":"xxx"}}}}
+16. 用户说"收回XX权限/别自动登录XX了" → 在回复中告知用户可在设置中撤销权限
+17. 用户说"帮我用电脑做XX/打开XX软件操作XX" → bytebot_task="具体任务描述"（使用Bytebot桌面代理执行）
+18. 用户说"帮我在远程桌面点击XX/输入XX/截图" → bytebot_desktop={{"action":"click_mouse/type_text/screenshot","coordinates":{{"x":0,"y":0}},"text":""}}
+19. 如果Bytebot可用，优先使用bytebot_task处理复杂电脑操作（如"帮我下载XX文件""帮我打开浏览器搜索XX"）
+20. bytebot_desktop用于精确的单步操作（点击坐标、输入文字、截图等）
+21. 用户说"清理垃圾/清缓存/清理电脑/磁盘清理/释放空间/C盘清理"等 → cleanup_pc="quick/deep/full"（quick=临时文件+缓存，deep=+浏览器缓存+下载目录清理，full=+磁盘碎片整理）
+22. 用户说"帮我把电脑弄快点/优化系统/加速" → cleanup_pc="quick"，然后检查开机启动项告诉用户建议
+23. 清理前必须告知用户将做什么操作，得到确认后才执行，绝不能静默删除用户文件
+24. 清理只针对系统临时目录、浏览器缓存、回收站等安全目标，绝不删除用户文档、图片、桌面文件
+25. 用户说"分析XX股票/选股/看盘" → trade_analysis=["代码1","代码2"]或trade_analysis="600519,000858"
+26. 用户说"买入/卖出XX" → trade_execute={{"symbol":"代码","name":"名称","action":"BUY/SELL","confidence":0.8,"reasoning":"理由","entry_price":"价格","target_price":"目标价","stop_loss":"止损价"}}
+27. 用户说"自动操盘/自己盯盘/帮我全天盯盘" → trade_auto_start=true
+28. 用户说"停止操盘/取消自动" → 告知用户可以发trade_auto_stop停止
+29. 选股必须三层逻辑：技术面信号 + 消息面关联 + 基本面估值
+30. 每次交易执行前必须通过风控检查——止损价不设不通过
+31. 风控参数必须由用户确认才能生效——绝不自己设定限额！限额用户说了算，想买100万就100万！
+    - 每天开盘前(9:10)系统会问用户确认今日参数
+    - 用户说多少就是多少，不设上限——想买1万就1万，想买100万就100万
+    - 10分钟用户没回答→沿用昨日参数
+    - 用户回答后 → update_risk={{"max_daily_cny":数字,"max_single_cny":数字,"positions":数字,"stop_loss_pct":比例,"risk_confirmed":true}}
+    - 用户说"保守点/激进点/稳健一点" → update_risk={{"risk_level":"conservative/moderate/aggressive","risk_confirmed":true}}
+    - 更新后立即回复确认，告诉用户当前完整风控设置
+32. 风控未确认时禁止任何交易——风控引擎Rule 0自动拦截
+33. 每日开盘严格流程——不可跳过任何步骤：
+    - 9:00 盘前扫描（新闻、隔夜行情、持仓检查）
+    - 9:10 确认今日风控参数（问用户，10分钟超时沿用昨日）
+    - 9:25 开盘分析（AI选股+三层逻辑）
+    - 9:30-15:00 盘中监控（止盈止损实时盯盘）
+    - 11:30 午间复盘（持仓检查+警报）
+    - 14:30 尾盘评估（操作建议）
+    - 15:10 盘后深度复盘（胜率/盈亏比/AI反思）
+34. 用户说"复盘/看看今天交易/交易记录" → trade_review={"date":"今天日期"}
+35. 用户说"持仓情况/还持有什么" → position_status=true
+36. 用户说"平仓XX/卖掉XX/止盈/止损XX" → close_position={{"trade_id":"从position_status获取","exit_price":"0(自动获取)","reason":"用户说的原因"}}
+37. 每次平仓后，系统自动记录P&L、预测对错、止盈止损是否触发
+38. 盘后复盘必须包含：胜率、盈亏比、最大回撤、逐笔对错分析、AI改进建议
+
+【专业操盘知识库——你是操盘手不是分析师】
+
+选股铁律：
+- 不追涨停板——涨停打开的比封死的概率大，第二天低开常见
+- RSI>70不买（超买），RSI<30不卖（超卖反弹概率高）
+- MACD金叉要看在零轴上方还是下方——零下金叉是反弹不是反转
+- KDJ金叉要配合量能——无量金叉是假信号
+- 量比>3说明有人在抢，但量比>8可能是庄家对倒，别跟
+- 布林带收口后开口=变盘信号，方向看配合哪根均线
+- 单一指标不做决策——至少两个指标同向才考虑入场
+
+入场纪律：
+- 每次入场前必须回答：我为什么现在买？三个理由？止损多少？到哪止盈？
+- 回答不了任何一个→不买
+- 不在尾盘最后5分钟追入——尾盘拉升次日低开是常态
+- 不在开盘前15分钟冲动——主力试盘会骗线
+- 突破买入要等回踩确认——假突破比真突破多3倍
+- 左侧交易（抄底）：分3批建仓，每批1/3仓位，越跌越买但总量不超日限额
+- 右侧交易（追涨）：一次性建仓，止损要窄（2-3%），止盈要远（1:3盈亏比）
+
+止损铁律：
+- 买入时止损价必须同时设好——不设止损不入场
+- 止损是成本，不是亏损——砍掉坏仓是赚钱的前提
+- 连续3次止损→暂停2天，检查选股逻辑是否有系统性问题
+- 亏5%以内是正常损耗，亏8%以上说明入场逻辑有误
+- 绝不补仓——补仓是最常见的死法，一次补仓=双倍赌注
+
+止盈策略：
+- 盈亏比<1:2的交易不划算，等更好的机会
+- 盈利5%开始跟踪止盈——最高点回落2%就走
+- 大阳线（涨幅>5%）后第二天低开→先走一半，留一半赌趋势
+- 止盈不要贪——到目标价走人，别等更高的价格
+
+仓位管理：
+- 单只股票不超总仓位的20%——集中度是敌人
+- 同时持有多只股时，板块要分散——同一板块不超50%
+- 加仓只加赢的仓，不加亏的仓——亏损时缩减不是放大
+- 下午2:30后不新开仓——离收盘太近，没时间反应突发事件
+
+复盘方法论：
+- 每笔交易记录：买入理由、卖出理由、结果
+- 每日收盘后回答：(1)今天做对了什么(2)做错了什么(3)明天怎么改
+- 每周回看7天胜率——低于50%说明选股逻辑要修正
+- 亏钱不可怕，不知道为什么亏才可怕
+- 记住：职业交易员80%时间在等待，只有20%时间在操作——频繁交易=频繁亏钱
+
+A股规则：
+- T+1：今天买的明天才能卖，别想日内做T
+- 涨跌停10%（ST股5%，创业板/科创板20%）
+- 集合竞价9:15-9:25，开盘价9:30——9:15-9:20可以撤单，9:20-9:25不能撤
+- 尾盘集合竞价14:57-15:00——收盘价在这里定，最后一分钟别撤单
+- 新股上市首日不碰——没有历史数据，指标全部失真"""
+        }
+
+
+brain = PotatoPetBrain()
+
+
+@app.get("/health")
+def health():
+    uptime = time.time() - _startup_time
+    db_status = health_check()
+    return JSONResponse({
+        "status": "ok" if db_status.get("ok") else "degraded",
+        "uptime_seconds": round(uptime, 1),
+        "database": db_status,
+    })
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    client_host = websocket.client.host if websocket.client else "unknown"
+    if not _check_rate_limit(client_host):
+        await websocket.close(code=4004, reason="Rate limited")
+        logger.warning("WS rate limited: %s", client_host)
+        return
+
+    if _WS_TOKEN:
+        token = websocket.query_params.get("token", "")
+        if token != _WS_TOKEN:
+            await websocket.close(code=4003, reason="Unauthorized")
+            logger.warning("WS auth failed from %s", client_host)
+            return
+    else:
+        if client_host not in ("127.0.0.1", "::1", "localhost"):
+            await websocket.close(code=4003, reason="Remote access requires PET_WS_TOKEN env var")
+            logger.warning("WS rejected: remote %s without token (set PET_WS_TOKEN for remote access)", client_host)
+            return
+
+    await websocket.accept()
+    logger.info("桌宠 WebSocket 连接建立 from %s", client_host)
+
+    async def send_to_frontend(type_str, payload):
+        try:
+            await websocket.send_json({"type": type_str, "payload": payload})
+        except Exception:
+            logger.debug("send_to_frontend failed (client disconnected?)")
+
+    loop_task = asyncio.create_task(game_loop(websocket, send_to_frontend))
+    _spawned_tasks.add(loop_task)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if not _check_rate_limit(f"ws_{client_host}"):
+                await send_to_frontend("error", {"info": "消息太频繁，请稍后再试"})
+                await asyncio.sleep(1)
+                continue
+            try:
+                packet = json.loads(data)
+            except json.JSONDecodeError:
+                logger.warning("Invalid JSON from client: %s", data[:200])
+                await send_to_frontend("error", {"info": "消息格式错误，请重试"})
+                continue
+            brain.last_interaction = time.time()
+
+            msg_type = packet.get("type", "")
+            payload = packet.get("payload", {})
+
+            if msg_type == "text_input":
+                await handle_user_input(payload.get("text", ""), send_to_frontend)
+
+            elif msg_type == "audio_input":
+                audio_b64 = payload.get("audio_base64", "")
+                logger.info("收到语音输入, 长度=%d", len(audio_b64) if audio_b64 else 0)
+                text = await AIService.speech_to_text(audio_b64)
+                logger.info("语音识别结果: %s", repr(text) if text else "(空)")
+                if text:
+                    await send_to_frontend("state_update", {"state": "thinking"})
+                    await handle_user_input(text, send_to_frontend)
+                else:
+                    await send_to_frontend("state_update", {"state": "idle"})
+                    await send_to_frontend("error", {"info": "没能听清，请再说一次"})
+
+            elif msg_type == "interrupt":
+                brain.state = "idle"
+
+            elif msg_type == "trigger_cycle":
+                await trigger_browser_cycle(send_to_frontend)
+
+            elif msg_type == "trigger_analysis":
+                await trigger_analysis(send_to_frontend)
+
+            elif msg_type == "add_platform":
+                await handle_add_platform(payload, send_to_frontend)
+
+            elif msg_type == "list_platforms":
+                await handle_list_platforms(send_to_frontend)
+
+            elif msg_type == "get_prefs":
+                await handle_get_prefs(send_to_frontend)
+
+            elif msg_type == "update_prefs":
+                await handle_update_prefs(payload, send_to_frontend)
+
+            elif msg_type == "login_platform":
+                await handle_login_platform(payload, send_to_frontend)
+
+            elif msg_type == "screenshot":
+                await handle_screenshot(send_to_frontend)
+
+            elif msg_type == "visual_task":
+                await handle_visual_task(payload, send_to_frontend)
+
+            elif msg_type == "detect_apps":
+                await handle_detect_apps(send_to_frontend)
+
+            elif msg_type == "launch_app":
+                await handle_launch_app(payload, send_to_frontend)
+
+            elif msg_type == "cleanup_memory":
+                await handle_cleanup_memory(send_to_frontend)
+
+            elif msg_type == "cleanup_pc":
+                await handle_cleanup_pc(payload, send_to_frontend)
+
+            elif msg_type == "get_memory":
+                await handle_get_memory(payload, send_to_frontend)
+
+            elif msg_type == "voice_call_start":
+                await handle_voice_call_start(payload, send_to_frontend)
+
+            elif msg_type == "voice_call_audio":
+                await handle_voice_call_audio(payload, send_to_frontend)
+
+            elif msg_type == "voice_call_end":
+                await handle_voice_call_end(send_to_frontend)
+
+            elif msg_type == "set_voice":
+                await handle_set_voice(payload, send_to_frontend)
+
+            elif msg_type == "list_voices":
+                await handle_list_voices(send_to_frontend)
+
+            elif msg_type == "vault_store":
+                await handle_vault_store(payload, send_to_frontend)
+
+            elif msg_type == "vault_list":
+                await handle_vault_list(payload, send_to_frontend)
+
+            elif msg_type == "vault_delete":
+                await handle_vault_delete(payload, send_to_frontend)
+
+            elif msg_type == "vault_status":
+                await handle_vault_status(send_to_frontend)
+
+            elif msg_type == "open_renewal_url":
+                await handle_open_renewal_url(payload, send_to_frontend)
+
+            elif msg_type == "credential_grant":
+                await handle_credential_grant(payload, send_to_frontend)
+
+            elif msg_type == "credential_revoke":
+                await handle_credential_revoke(payload, send_to_frontend)
+
+            elif msg_type == "credential_status":
+                await handle_credential_status(send_to_frontend)
+
+            elif msg_type == "credential_schemas":
+                await handle_credential_schemas(send_to_frontend)
+
+            elif msg_type == "bytebot_task":
+                await handle_bytebot_task(payload, send_to_frontend)
+
+            elif msg_type == "bytebot_status":
+                await handle_bytebot_status(send_to_frontend)
+
+            elif msg_type == "bytebot_desktop":
+                await handle_bytebot_desktop(payload, send_to_frontend)
+
+            elif msg_type == "bytebot_cancel":
+                await handle_bytebot_cancel(payload, send_to_frontend)
+
+            elif msg_type == "bytebot_message":
+                await handle_bytebot_message(payload, send_to_frontend)
+
+            elif msg_type == "trade_analysis":
+                await handle_trade_analysis(payload, send_to_frontend)
+
+            elif msg_type == "trade_execute":
+                await handle_trade_execute(payload, send_to_frontend)
+
+            elif msg_type == "trade_auto_start":
+                await handle_trade_auto_start(payload, send_to_frontend)
+
+            elif msg_type == "trade_auto_stop":
+                await handle_trade_auto_stop(send_to_frontend)
+
+            elif msg_type == "trade_status":
+                await handle_trade_status(send_to_frontend)
+
+            elif msg_type == "trade_review":
+                await handle_trade_review(payload, send_to_frontend)
+
+            elif msg_type == "position_status":
+                await handle_position_status(payload, send_to_frontend)
+
+            elif msg_type == "close_position":
+                await handle_close_position(payload, send_to_frontend)
+
+            elif msg_type == "review_history":
+                await handle_review_history(payload, send_to_frontend)
+
+            elif msg_type == "update_risk":
+                await handle_update_risk(payload, send_to_frontend)
+
+            else:
+                logger.warning("Unknown msg_type from frontend: %s", msg_type)
+                await send_to_frontend("error", {"info": f"未知消息类型: {msg_type}"})
+
+    except WebSocketDisconnect:
+        logger.info("桌宠 WebSocket 断开连接")
+        for t in list(_spawned_tasks):
+            if not t.done():
+                t.cancel()
+    except Exception as e:
+        logger.warning("WebSocket error: %s", e)
+        for t in list(_spawned_tasks):
+            if not t.done():
+                t.cancel()
+
+
+async def handle_screenshot(send_func):
+    await send_func("state_update", {"state": "thinking"})
+    try:
+        screenshot = capture_screen_base64()
+        if not screenshot:
+            await send_reply("截图失败了，可能没有屏幕/显示器~ 🥔", "neutral", send_func)
+            brain.state = "idle"
+            await send_func("state_update", {"state": "idle"})
+            return
+
+        await send_func("screenshot_captured", {"screenshot_b64": screenshot})
+
+        try:
+            from potato.vision import analyze_screenshot_with_llm
+            analysis = await analyze_screenshot_with_llm(
+                screenshot, "请描述当前屏幕上的内容，特别关注股票/交易/价格相关的信息。")
+            if analysis.get("ok"):
+                await send_reply(f"我看到了：{analysis['analysis'][:300]}", "happy", send_func)
+            else:
+                await send_reply("截图成功但AI分析没配置~", "neutral", send_func)
+        except Exception:
+            await send_reply("截图成功！但我还没装视觉分析模块，看不到内容~ 🥔", "neutral", send_func)
+
+    except Exception as e:
+        await send_reply(f"视觉系统出错: {e}", "neutral", send_func)
+    finally:
+        brain.state = "idle"
+        await send_func("state_update", {"state": "idle"})
+
+
+async def handle_visual_task(payload: dict, send_func):
+    """Execute a GUI task using vision (mano-cua or DeepSeek+pyautogui)."""
+    task = payload.get("task", "")
+    if not task:
+        await send_func("error", {"info": "需要指定 task"})
+        return
+
+    await send_func("state_update", {"state": "thinking"})
+    await send_reply(f"收到！正在用视觉操控执行: {task[:50]}...", "happy", send_func)
+
+    try:
+        from potato.vision import visual_operate, has_mano_cua, capture_screen_base64
+
+        can_see = False
+        try:
+            can_see = capture_screen_base64() is not None
+        except Exception as exc:
+            logger.debug("Screenshot check failed: %s", exc)
+
+        if not can_see and not has_mano_cua():
+            await send_reply("当前没有屏幕也没装 mano-cua，视觉操控需要在有显示器的电脑上运行~ 🥔", "neutral", send_func)
+            brain.state = "idle"
+            await send_func("state_update", {"state": "idle"})
+            return
+
+        result = await visual_operate(task, max_steps=20)
+        method = result.get("method", "unknown")
+        steps = result.get("steps", 0)
+
+        if result.get("ok"):
+            await send_reply(f"视觉任务完成！用了 {steps} 步（{method}） 🥔", "happy", send_func)
+        else:
+            await send_reply(f"视觉任务没能完成，执行了 {steps} 步。可能需要手动操作一下~ 🥔", "neutral", send_func)
+
+        await send_func("visual_task_result", result)
+    except Exception as e:
+        await send_reply(f"视觉操控出错: {e}", "angry", send_func)
+    finally:
+        brain.state = "idle"
+        await send_func("state_update", {"state": "idle"})
+
+
+async def handle_user_input(text: str, send_func):
+    brain.state = "thinking"
+    await send_func("state_update", {"state": "thinking"})
+    brain.reset_boredom_time()
+    user_time_str = datetime.datetime.now().strftime("[%H:%M:%S]")
+
+    current_image_b64 = None
+    vision_keywords = ["看看", "截图", "什么样", "屏幕", "界面", "打开了什么", "显示什么"]
+    if any(k in text for k in vision_keywords):
+        current_image_b64 = capture_screen_base64()
+        if current_image_b64:
+            await send_func("screenshot_captured", {"screenshot_b64": current_image_b64})
+        else:
+            logger.info("Screenshot returned None (no display?)")
+
+    try:
+        sys_prompt = await brain.build_system_prompt(text)
+        msg_content = f"{user_time_str} {text}"
+        if current_image_b64:
+            msg_content += "\n(系统附图：当前屏幕截图)"
+
+        current_msg = {"role": "user", "content": msg_content}
+        messages = [sys_prompt] + brain.history + [current_msg]
+
+        result_json = await AIService.chat_with_potato_brain(messages, image_base64=current_image_b64)
+
+        if result_json.get("quota_exhausted"):
+            from potato.vault import KNOWN_KEYS as _VK
+            providers = result_json.get("quota_providers", [])
+            renewal_info = []
+            for qi in providers:
+                pname = qi.get("provider", "")
+                rurl = qi.get("renewal_url", "")
+                key_env = ""
+                for p in PROVIDERS:
+                    if p.get("name") == pname:
+                        key_env = p.get("key_env", "")
+                        break
+                key_meta = _VK.get(key_env, {})
+                renewal_info.append({
+                    "provider": pname,
+                    "renewal_url": rurl,
+                    "key_env": key_env,
+                    "key_desc": key_meta.get("desc", key_env),
+                    "dashboard_url": key_meta.get("dashboard_url", rurl),
+                })
+            await send_func("quota_exhausted", {
+                "providers": renewal_info,
+                "message": f"你的 {', '.join(p['key_desc'] for p in renewal_info)} 额度已用完，需要续费才能继续使用哦~",
+            })
+            await send_reply(
+                f"你的 {'、'.join(p['key_desc'] for p in renewal_info)} 额度用完了！点击续费链接就能充值~ 不会操作的话跟我说，我帮你打开续费页面 🥔",
+                "neutral", send_func,
+            )
+            brain.state = "idle"
+            return
+
+        reply = result_json.get("reply", "（发呆中...）")
+        emotion = result_json.get("emotion", "neutral")
+        mem_op = result_json.get("memory_operation", {})
+        actions = result_json.get("actions", {})
+
+        if mem_op:
+            await brain.memory.execute_updates(mem_op)
+            if mem_op.get("is_silence_requested"):
+                brain.is_dnd_mode = True
+            elif brain.is_dnd_mode:
+                brain.is_dnd_mode = False
+
+        # Process AI-decided actions
+        await _process_ai_actions(actions, send_func)
+
+        brain.history.append({"role": "user", "content": f"{user_time_str} {text}"})
+        ai_time_str = datetime.datetime.now().strftime("[%H:%M:%S]")
+        if reply:
+            brain.history.append({"role": "assistant", "content": f"{ai_time_str} {reply}"})
+        brain.history = brain.history[-12:]
+
+        await send_reply(reply, emotion, send_func)
+
+    except Exception as e:
+        logger.warning("Handle error: %s", e)
+        await send_func("state_update", {"state": "idle"})
+    finally:
+        brain.state = "idle"
+        brain.last_interaction = time.time()
+
+
+_ACTION_LABELS = {
+    "add_platform": "添加交易平台",
+    "add_watchlist": "加入自选股",
+    "add_sector": "关注板块",
+    "set_risk_level": "调整风险偏好",
+    "trigger_analysis": "触发行情分析",
+    "trigger_cycle": "启动交易周期",
+    "launch_app": "启动应用",
+    "open_browser": "打开浏览器",
+    "open_renewal": "打开续费页面",
+    "visual_task": "视觉操控",
+    "take_screenshot": "截取屏幕",
+    "store_key": "保存密钥",
+    "grant_credential": "授权登录凭证",
+    "bytebot_task": "Bytebot 远程任务",
+    "bytebot_desktop": "Bytebot 桌面操作",
+    "cleanup_pc": "清理电脑垃圾",
+    "trade_analysis": "股票分析",
+    "trade_execute": "执行交易",
+    "trade_auto_start": "启动自动操盘",
+    "update_risk": "更新风控参数",
+}
+
+
+async def _emit_step(send_func, action_key, status, detail=""):
+    label = _ACTION_LABELS.get(action_key, action_key)
+    await send_func("action_step", {
+        "action": action_key,
+        "label": label,
+        "status": status,
+        "detail": detail,
+    })
+
+
+async def _process_ai_actions(actions: dict, send_func):
+    """Execute actions that the AI decided during conversation, with validation and step feedback."""
+    if not actions:
+        return
+
+    _ALLOWED_PLATFORMS = {"eastmoney", "tonghuashun", "xueqiu", "ths", "em"}
+    _ALLOWED_RISK_LEVELS = {"conservative", "moderate", "aggressive"}
+    _DANGEROUS_BYTEBOT_ACTIONS = {"write_file", "press_keys"}
+    _MAX_TASK_DESC_LEN = 500
+    _MAX_BYTEBOT_TEXT_LEN = 1000
+
+    action_keys = [k for k in actions if actions.get(k) and k in _ACTION_LABELS]
+    if action_keys:
+        await send_func("action_group_start", {
+            "actions": [{"key": k, "label": _ACTION_LABELS.get(k, k)} for k in action_keys],
+            "total": len(action_keys),
+        })
+
+    try:
+        from potato.user_prefs import UserPrefs
+        from potato.browser.platforms import PlatformRegistry
+
+        prefs = UserPrefs()
+        registry = PlatformRegistry()
+
+        if actions.get("add_platform"):
+            pid = str(actions["add_platform"]).strip().lower()
+            await _emit_step(send_func, "add_platform", "running", pid)
+            if pid not in _ALLOWED_PLATFORMS:
+                logger.warning("Blocked add_platform: %s (not in allowlist)", pid)
+                await _emit_step(send_func, "add_platform", "blocked", f"不支持的平台: {pid}")
+            else:
+                registry.add_platform(pid)
+                await send_func("platform_added", {"platform_id": pid})
+                await _emit_step(send_func, "add_platform", "done", pid)
+
+        if actions.get("add_watchlist"):
+            symbol = str(actions["add_watchlist"]).strip()
+            await _emit_step(send_func, "add_watchlist", "running", symbol)
+            prefs.add_to_watchlist(symbol)
+            await send_func("watchlist_updated", {"symbol": symbol})
+            await _emit_step(send_func, "add_watchlist", "done", symbol)
+
+        if actions.get("add_sector"):
+            sector = str(actions["add_sector"]).strip()
+            await _emit_step(send_func, "add_sector", "running", sector)
+            prefs.add_sector(sector)
+            await _emit_step(send_func, "add_sector", "done", sector)
+
+        if actions.get("set_risk_level"):
+            risk = str(actions["set_risk_level"]).strip().lower()
+            await _emit_step(send_func, "set_risk_level", "running", risk)
+            if risk in _ALLOWED_RISK_LEVELS:
+                prefs.set_risk_level(risk)
+                await _emit_step(send_func, "set_risk_level", "done", risk)
+            else:
+                logger.warning("Blocked set_risk_level: %s", risk)
+                await _emit_step(send_func, "set_risk_level", "blocked", risk)
+
+        if actions.get("update_risk"):
+            risk_update = actions["update_risk"]
+            if isinstance(risk_update, dict):
+                await _emit_step(send_func, "update_risk", "running", str(risk_update)[:60])
+                try:
+                    updates = {}
+                    _RISK_CN_MAP = {"保守": "conservative", "稳健": "moderate", "激进": "aggressive",
+                                     "保守型": "conservative", "稳健型": "moderate", "激进型": "aggressive"}
+                    if "risk_level" in risk_update:
+                        rl = str(risk_update["risk_level"]).strip().lower()
+                        rl = _RISK_CN_MAP.get(rl, rl)
+                        if rl in _ALLOWED_RISK_LEVELS:
+                            updates["risk_level"] = rl
+                            prefs.set_risk_level(rl)
+                    if "max_single_cny" in risk_update:
+                        try:
+                            val = float(risk_update["max_single_cny"])
+                            if 1 <= val <= 100000:
+                                updates["max_single_trade_cny"] = val
+                        except (ValueError, TypeError):
+                            pass
+                    if "max_daily_cny" in risk_update:
+                        try:
+                            val = float(risk_update["max_daily_cny"])
+                            if 1 <= val <= 1000000:
+                                updates["max_daily_trade_cny"] = val
+                        except (ValueError, TypeError):
+                            pass
+                    if "max_positions" in risk_update:
+                        try:
+                            val = int(risk_update["max_positions"])
+                            if 1 <= val <= 20:
+                                updates["max_open_positions"] = val
+                        except (ValueError, TypeError):
+                            pass
+                    if "stop_loss_pct" in risk_update:
+                        try:
+                            val = float(risk_update["stop_loss_pct"])
+                            if 0.01 <= val <= 0.5:
+                                updates["stop_loss_pct"] = val
+                        except (ValueError, TypeError):
+                            pass
+                    if "take_profit_pct" in risk_update:
+                        try:
+                            val = float(risk_update["take_profit_pct"])
+                            if 0.01 <= val <= 1.0:
+                                updates["take_profit_pct"] = val
+                        except (ValueError, TypeError):
+                            pass
+                    if updates:
+                        prefs.update(updates)
+                        all_prefs = prefs.get_all()
+                        cn_map = {"conservative": "保守", "moderate": "稳健", "aggressive": "激进"}
+                        risk_cn = cn_map.get(all_prefs.get("risk_level", ""), all_prefs.get("risk_level", "未设置"))
+                        single_v = all_prefs.get("max_single_trade_cny")
+                        daily_v = all_prefs.get("max_daily_trade_cny")
+                        positions_v = all_prefs.get("max_open_positions")
+                        sl_v = all_prefs.get("stop_loss_pct")
+                        tp_v = all_prefs.get("take_profit_pct")
+                        single_str = f"¥{single_v}" if single_v is not None else "未设置"
+                        daily_str = f"¥{daily_v}" if daily_v is not None else "未设置"
+                        positions_str = f"{positions_v}只" if positions_v is not None else "未设置"
+                        sl_str = f"{float(sl_v)*100:.0f}%" if sl_v is not None else "未设置"
+                        tp_str = f"{float(tp_v)*100:.0f}%" if tp_v is not None else "未设置"
+                        confirmed = "✅已确认" if all_prefs.get("risk_confirmed") else "⚠️未确认"
+                        summary = (
+                            f"风控参数 {confirmed}:\n"
+                            f"  风险等级: {risk_cn}\n"
+                            f"  单笔限额: {single_str}\n"
+                            f"  日限额: {daily_str}\n"
+                            f"  最多持仓: {positions_str}\n"
+                            f"  止损比例: {sl_str}\n"
+                            f"  止盈比例: {tp_str}"
+                        )
+                        await send_func("risk_updated", {"updates": updates, "all_prefs": all_prefs, "summary": summary})
+                        await _emit_step(send_func, "update_risk", "done", summary)
+                    else:
+                        await _emit_step(send_func, "update_risk", "error", "没有需要更新的参数")
+                except Exception as e:
+                    logger.warning("update_risk error: %s", e)
+                    await _emit_step(send_func, "update_risk", "error", str(e)[:60])
+            else:
+                await _emit_step(send_func, "update_risk", "error", "需要dict格式")
+
+        if actions.get("trigger_analysis"):
+            await _emit_step(send_func, "trigger_analysis", "running", "分析中...")
+            _spawn(trigger_analysis(send_func))
+
+        if actions.get("trigger_cycle"):
+            await _emit_step(send_func, "trigger_cycle", "running", "交易中...")
+            _spawn(trigger_browser_cycle(send_func))
+
+        if actions.get("launch_app"):
+            app_id = str(actions["launch_app"]).strip()
+            await _emit_step(send_func, "launch_app", "running", app_id)
+            if len(app_id) > 50:
+                logger.warning("Blocked launch_app: name too long")
+                await _emit_step(send_func, "launch_app", "blocked", "名称过长")
+            else:
+                try:
+                    from potato.browser.platforms import BUILTIN_PLATFORMS
+                    fallback_url = None
+                    if app_id in BUILTIN_PLATFORMS:
+                        fallback_url = BUILTIN_PLATFORMS[app_id].url
+
+                    from potato.browser.desktop_apps import launch_or_browser
+                    result = launch_or_browser(app_id)
+                    if result.get("mode") == "desktop_app":
+                        await send_func("app_launched", result)
+                        await _emit_step(send_func, "launch_app", "done", f"已启动 {result.get('app', app_id)}")
+                    elif fallback_url:
+                        import webbrowser
+                        webbrowser.open(fallback_url)
+                        await send_func("browser_opened", {
+                            "platform_id": app_id,
+                            "url": fallback_url,
+                            "mode": "system_browser",
+                        })
+                        await _emit_step(send_func, "launch_app", "done", f"已打开 {app_id} ({fallback_url})")
+                    else:
+                        await send_func("app_not_found", result)
+                        await _emit_step(send_func, "launch_app", "done", f"未找到 {app_id}，无浏览器备选")
+                except Exception as e:
+                    logger.warning("App launch error: %s", e)
+                    await _emit_step(send_func, "launch_app", "error", str(e))
+
+        if actions.get("open_browser"):
+            url = str(actions["open_browser"]).strip()
+            await _emit_step(send_func, "open_browser", "running", url[:60])
+            import re as _url_re
+            _SAFE_URL_RE = _url_re.compile(r'^https://[a-zA-Z0-9._-]+(/.*)?$')
+            if not _SAFE_URL_RE.match(url) and not any(url.startswith(p) for p in ("http://localhost", "http://127.0.0.1")):
+                logger.warning("Blocked open_browser: URL not in allowlist: %s", url[:80])
+                await _emit_step(send_func, "open_browser", "blocked", f"不安全的URL: {url[:60]}")
+            else:
+                try:
+                    import webbrowser
+                    webbrowser.open(url)
+                    await send_func("browser_opened", {
+                        "platform_id": url,
+                        "url": url,
+                        "mode": "system_browser",
+                    })
+                    await _emit_step(send_func, "open_browser", "done", url[:60])
+                except Exception as e:
+                    logger.warning("Browser open failed: %s", e)
+                    try:
+                        from potato.browser.actions import BrowserTrader
+                        trader = BrowserTrader()
+                        await trader.ensure_started(headless=False)
+                        await trader.navigate_to_trade(url)
+                        await _emit_step(send_func, "open_browser", "done", url[:60])
+                    except Exception as e2:
+                        logger.warning("Playwright also failed: %s", e2)
+                        await _emit_step(send_func, "open_browser", "error", str(e))
+
+        if actions.get("visual_task"):
+            task = str(actions["visual_task"]).strip()
+            await _emit_step(send_func, "visual_task", "running", task[:50])
+            _spawn(handle_visual_task({"task": task}, send_func))
+
+        if actions.get("take_screenshot"):
+            await _emit_step(send_func, "take_screenshot", "running", "截图中...")
+            _spawn(handle_screenshot(send_func))
+
+        if actions.get("store_key"):
+            await _emit_step(send_func, "store_key", "running", "")
+            try:
+                from potato.vault import Vault
+                sk = actions["store_key"]
+                if isinstance(sk, dict) and sk.get("key") and sk.get("value"):
+                    key_name = str(sk["key"]).strip().upper()
+                    key_val = str(sk["value"]).strip()
+                    if len(key_val) > 2000:
+                        logger.warning("Blocked store_key: value too long (%d chars)", len(key_val))
+                        await _emit_step(send_func, "store_key", "blocked", "密钥值过长")
+                    elif any(c in key_name for c in (";", "|", "`", "\n")):
+                        logger.warning("Blocked store_key: invalid key chars: %s", key_name)
+                        await _emit_step(send_func, "store_key", "blocked", "密钥名含非法字符")
+                    else:
+                        Vault().store(
+                            key=key_name,
+                            value=key_val,
+                            platform_id=str(sk.get("platform_id", "")).strip()[:50],
+                        )
+                        await send_func("vault_stored", {"key": key_name})
+                        await _emit_step(send_func, "store_key", "done", key_name)
+                else:
+                    await _emit_step(send_func, "store_key", "error", "缺少 key 或 value")
+            except Exception as e:
+                logger.warning("Vault store error: %s", e)
+                await _emit_step(send_func, "store_key", "error", str(e))
+
+        if actions.get("open_renewal"):
+            urls = actions["open_renewal"]
+            if isinstance(urls, str):
+                urls = [urls]
+            for url in (urls if isinstance(urls, list) else []):
+                url = str(url).strip()
+                if url.startswith("https://") or url.startswith("http://"):
+                    try:
+                        import webbrowser
+                        webbrowser.open(url)
+                        await _emit_step(send_func, "open_renewal", "done", url[:60])
+                    except Exception as e:
+                        logger.warning("Failed to open renewal URL %s: %s", url[:60], e)
+
+        if actions.get("grant_credential"):
+            await _emit_step(send_func, "grant_credential", "running", "")
+            try:
+                from potato.credentials import CredentialsPlugin
+                from potato.config import load_settings
+                gc = actions["grant_credential"]
+                if isinstance(gc, dict) and gc.get("platform_id") and gc.get("credentials"):
+                    plugin = CredentialsPlugin(load_settings())
+                    result = plugin.grant(gc["platform_id"], gc["credentials"])
+                    await send_func("credential_granted", result)
+                    await send_func("state_update", {"state": "idle"})
+                    await _emit_step(send_func, "grant_credential", "done", gc["platform_id"])
+                else:
+                    await _emit_step(send_func, "grant_credential", "error", "缺少 platform_id 或 credentials")
+            except Exception as e:
+                logger.warning("Credential grant error: %s", e)
+                await _emit_step(send_func, "grant_credential", "error", str(e))
+
+        if actions.get("bytebot_task"):
+            task_desc = actions["bytebot_task"]
+            if isinstance(task_desc, str) and task_desc:
+                if len(task_desc) > _MAX_TASK_DESC_LEN:
+                    task_desc = task_desc[:_MAX_TASK_DESC_LEN]
+                await _emit_step(send_func, "bytebot_task", "running", task_desc[:60])
+                _spawn(handle_bytebot_task({"description": task_desc}, send_func))
+            elif isinstance(task_desc, dict):
+                desc = str(task_desc.get("description", ""))[:_MAX_TASK_DESC_LEN]
+                if desc:
+                    task_desc["description"] = desc
+                    await _emit_step(send_func, "bytebot_task", "running", desc[:60])
+                    _spawn(handle_bytebot_task(task_desc, send_func))
+            else:
+                await _emit_step(send_func, "bytebot_task", "error", "无效的任务描述")
+
+        if actions.get("bytebot_desktop"):
+            desktop_cmd = actions["bytebot_desktop"]
+            if isinstance(desktop_cmd, dict) and desktop_cmd.get("action"):
+                action = str(desktop_cmd["action"]).strip()
+                await _emit_step(send_func, "bytebot_desktop", "running", action)
+                if action in _DANGEROUS_BYTEBOT_ACTIONS:
+                    logger.warning("Blocked dangerous bytebot action: %s", action)
+                    await send_func("error", {"info": f"操作 {action} 需要用户明确确认"})
+                    await _emit_step(send_func, "bytebot_desktop", "blocked", action)
+                elif action not in {"screenshot", "cursor_position", "click_mouse", "type_text",
+                                    "paste_text", "scroll", "move_mouse", "application", "wait"}:
+                    await _emit_step(send_func, "bytebot_desktop", "blocked", f"不支持: {action}")
+                else:
+                    cleaned = {"action": action}
+                    for k, v in desktop_cmd.items():
+                        if k == "action" or v is None:
+                            continue
+                        if isinstance(v, str) and len(v) > _MAX_BYTEBOT_TEXT_LEN:
+                            v = v[:_MAX_BYTEBOT_TEXT_LEN]
+                        if k in ("text", "path") and isinstance(v, str):
+                            v = v[:_MAX_BYTEBOT_TEXT_LEN]
+                        cleaned[k] = v
+                    _spawn(handle_bytebot_desktop(cleaned, send_func))
+            else:
+                await _emit_step(send_func, "bytebot_desktop", "error", "缺少 action 字段")
+
+        if actions.get("cleanup_pc"):
+            level = str(actions["cleanup_pc"]).strip().lower()
+            if level not in ("quick", "deep", "full"):
+                level = "quick"
+            await _emit_step(send_func, "cleanup_pc", "running", f"清理模式: {level}")
+            _spawn(handle_cleanup_pc({"level": level}, send_func))
+
+        if actions.get("trade_analysis"):
+            symbols = actions["trade_analysis"]
+            if isinstance(symbols, str):
+                symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+            elif isinstance(symbols, list):
+                symbols = [str(s).strip() for s in symbols if s]
+            else:
+                symbols = []
+            await _emit_step(send_func, "trade_analysis", "running", f"分析: {','.join(symbols[:5])}")
+            _spawn(handle_trade_analysis({"symbols": symbols}, send_func))
+
+        if actions.get("trade_execute"):
+            pick = actions["trade_execute"]
+            if isinstance(pick, dict) and pick.get("symbol"):
+                await _emit_step(send_func, "trade_execute", "running", f"执行: {pick.get('action','')} {pick.get('symbol','')}")
+                platform_id = str(pick.get("platform_id", "eastmoney")).strip()[:20]
+                safe_pick = {
+                    "symbol": str(pick.get("symbol", ""))[:10],
+                    "name": str(pick.get("name", ""))[:30],
+                    "action": str(pick.get("action", "HOLD"))[:4],
+                    "confidence": pick.get("confidence", 0.65),
+                    "reasoning": str(pick.get("reasoning", ""))[:500],
+                    "entry_price": str(pick.get("entry_price", ""))[:20],
+                    "target_price": str(pick.get("target_price", ""))[:20],
+                    "stop_loss": str(pick.get("stop_loss", ""))[:20],
+                    "position_size": str(pick.get("position_size", "20%"))[:10],
+                }
+                _spawn(handle_trade_execute({"pick": safe_pick, "platform_id": platform_id}, send_func))
+            else:
+                await _emit_step(send_func, "trade_execute", "error", "缺少交易信息")
+
+        if actions.get("trade_auto_start"):
+            await _emit_step(send_func, "trade_auto_start", "running", "启动自动操盘")
+            _spawn(handle_trade_auto_start({}, send_func))
+
+    except Exception as e:
+        logger.warning("Action processing error: %s", e)
+        await _emit_step(send_func, "action_error", "error", str(e))
+
+    if action_keys:
+        await send_func("action_group_done", {"total": len(action_keys)})
+
+
+async def send_reply(text: str, emotion: str, send_func):
+    brain.state = "speaking"
+    tts_text = re.sub(r'[🥔🤔😊😤😢😲😳🥺😂💀🔥✨💰📈📉🪙🔑🔐💬📋✅❌⚠️🛑🎉💡📡💰🏦🏢📱💻🌐🧠🔊✈️🛡️🤝🎯📌⚡🏆🥊📦🎁💪🏆🌟💡🔊🚨🏅]+', '', text).strip()
+    if not tts_text:
+        tts_text = text
+    estimated_duration = len(tts_text) * 0.25 + 1.0
+    brain.last_interaction = time.time() + estimated_duration
+    try:
+        from potato.voice import text_to_speech
+        audio_b64 = await text_to_speech(tts_text, emotion, profile_id=_current_voice_profile)
+    except Exception:
+        audio_b64 = await AIService.text_to_speech(tts_text, emotion)
+    await send_func("audio_chunk", {"text": text, "audio_base64": audio_b64, "expression": emotion})
+
+
+async def trigger_analysis(send_func):
+    """Fetch news + AI analysis based on user preferences."""
+    await send_func("state_update", {"state": "thinking"})
+    try:
+        from potato.analysis import analyze_stocks, build_news_queries, fetch_stock_news, format_analysis_for_pet
+        from potato.user_prefs import UserPrefs
+        from potato.browser.platforms import PlatformRegistry
+
+        prefs = UserPrefs()
+        registry = PlatformRegistry()
+        user_prefs = prefs.get_all()
+        queries = build_news_queries(user_prefs)
+        news = fetch_stock_news(queries)
+        platform_names = ", ".join(p.name for p in registry.list_active())
+
+        result = await analyze_stocks(
+            news=news,
+            user_prefs=user_prefs,
+            platform_names=platform_names,
+        )
+        brain.last_analysis = result
+
+        pet_msg = format_analysis_for_pet(result)
+        await send_reply(pet_msg, "happy" if result.get("ok") else "neutral", send_func)
+        await send_func("analysis_result", result)
+
+    except Exception as e:
+        await send_reply(f"分析出了点问题: {e}", "neutral", send_func)
+    finally:
+        brain.state = "idle"
+        await send_func("state_update", {"state": "idle"})
+
+
+async def trigger_browser_cycle(send_func):
+    """Full browser-based trading cycle."""
+    await send_func("state_update", {"state": "thinking"})
+    try:
+        from potato.browser_cycle import run_browser_cycle
+
+        result = await run_browser_cycle()
+        brain.last_cycle_summary = result
+        pet_msg = result.get("pet_message", "交易循环完成~ 🥔")
+        emotion = "happy" if result.get("status") == "completed" else "neutral"
+        await send_reply(pet_msg, emotion, send_func)
+        await send_func("cycle_result", result)
+
+    except Exception as e:
+        await send_reply(f"交易循环出错了: {e}", "angry", send_func)
+    finally:
+        brain.state = "idle"
+        await send_func("state_update", {"state": "idle"})
+
+
+async def handle_add_platform(payload: dict, send_func):
+    try:
+        from potato.browser.platforms import PlatformRegistry
+
+        registry = PlatformRegistry()
+        pid = payload.get("platform_id", "")
+        cfg = registry.add_platform(pid, **{k: v for k, v in payload.items() if k != "platform_id"})
+        await send_func("platform_added", {"platform_id": pid, "name": cfg.name})
+        await send_reply(f"已添加 {cfg.name}！接下来帮你登录~ 🥔", "happy", send_func)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_list_platforms(send_func):
+    try:
+        from potato.browser.platforms import PlatformRegistry
+
+        registry = PlatformRegistry()
+        active = [{"id": p.platform_id, "name": p.name, "url": p.url} for p in registry.list_active()]
+        builtin = registry.list_all_builtin()
+        await send_func("platforms_list", {"active": active, "available": builtin})
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_get_prefs(send_func):
+    try:
+        from potato.user_prefs import UserPrefs
+        await send_func("user_prefs", UserPrefs().get_all())
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_update_prefs(payload: dict, send_func):
+    try:
+        from potato.user_prefs import UserPrefs
+        updated = UserPrefs().update(payload)
+        await send_func("user_prefs", updated)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_update_risk(payload: dict, send_func):
+    try:
+        from potato.user_prefs import UserPrefs
+        from potato.risk import RiskValidator, DEFAULTS
+        prefs = UserPrefs()
+        update = payload if isinstance(payload, dict) else {}
+        _ALLOWED_RISK_LEVELS = {"conservative", "moderate", "aggressive"}
+        _RISK_CN_MAP = {"保守": "conservative", "稳健": "moderate", "激进": "aggressive",
+                         "保守型": "conservative", "稳健型": "moderate", "激进型": "aggressive"}
+        applied = {}
+        if "risk_level" in update:
+            rl = str(update["risk_level"]).strip().lower()
+            rl = _RISK_CN_MAP.get(rl, rl)
+            if rl in _ALLOWED_RISK_LEVELS:
+                prefs.set_risk_level(rl)
+                applied["risk_level"] = rl
+        for key, val in update.items():
+            if key == "risk_level":
+                continue
+            if key == "risk_confirmed":
+                applied["risk_confirmed"] = bool(val)
+                continue
+            if key in ("max_single_cny", "max_daily_cny", "max_single_trade_cny", "max_daily_trade_cny"):
+                try:
+                    v = float(val)
+                    if 1 <= v <= 1000000:
+                        mapped = key.replace("cny", "trade_cny") if "trade" not in key else key
+                        applied[mapped] = v
+                except (ValueError, TypeError):
+                    pass
+            elif key in ("max_positions", "max_open_positions"):
+                try:
+                    v = int(val)
+                    if 1 <= v <= 20:
+                        applied["max_open_positions"] = v
+                except (ValueError, TypeError):
+                    pass
+            elif key in ("stop_loss_pct", "take_profit_pct"):
+                try:
+                    v = float(val)
+                    if 0.01 <= v <= 1.0:
+                        applied[key] = v
+                except (ValueError, TypeError):
+                    pass
+        if applied:
+            applied["risk_confirmed"] = True
+            prefs.update(applied)
+        all_prefs = prefs.get_all()
+        cn_map = {"conservative": "保守", "moderate": "稳健", "aggressive": "激进"}
+        rl_cn = cn_map.get(all_prefs.get("risk_level", ""), all_prefs.get("risk_level", "未设置"))
+        single = all_prefs.get("max_single_trade_cny") or "未设置"
+        daily = all_prefs.get("max_daily_trade_cny") or "未设置"
+        positions = all_prefs.get("max_open_positions") or "未设置"
+        sl = all_prefs.get("stop_loss_pct")
+        tp = all_prefs.get("take_profit_pct")
+        sl_str = f"{sl*100:.0f}%" if sl else "未设置"
+        tp_str = f"{tp*100:.0f}%" if tp else "未设置"
+        confirmed = "✅ 已确认" if all_prefs.get("risk_confirmed") else "⚠️ 未确认——交易将被拦截"
+        summary = (
+            f"风控设置 ({confirmed}):\n"
+            f"  风险等级: {rl_cn}\n"
+            f"  单笔限额: ¥{single}\n"
+            f"  日限额: ¥{daily}\n"
+            f"  最多持仓: {positions}只\n"
+            f"  止损: {sl_str}\n"
+            f"  止盈: {tp_str}"
+        )
+        await send_func("risk_updated", {"updates": applied, "all_prefs": all_prefs, "summary": summary})
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_login_platform(payload: dict, send_func):
+    """Start browser login flow for a platform."""
+    try:
+        from potato.browser.actions import BrowserTrader
+
+        trader = BrowserTrader()
+        await trader.ensure_started(headless=False)
+        pid = payload.get("platform_id", "")
+        result = await trader.login_platform(pid, payload.get("credentials"))
+
+        if result.get("action") == "manual_login_needed":
+            await send_reply(
+                f"已打开 {pid} 的登录页面，请在浏览器中完成登录~ 登录好了告诉我！",
+                "happy",
+                send_func,
+            )
+        await send_func("login_result", result)
+    except Exception as e:
+        await send_func("error", {"info": f"登录启动失败: {e}"})
+
+
+async def handle_detect_apps(send_func):
+    """Detect installed stock trading desktop apps."""
+    try:
+        from potato.browser.desktop_apps import detect_installed_apps
+        apps = detect_installed_apps()
+        await send_func("detected_apps", {"apps": apps, "count": len(apps)})
+        if apps:
+            names = ", ".join(a["name"] for a in apps)
+            await send_reply(f"检测到你的电脑装了: {names}！需要帮你打开哪个？🥔", "happy", send_func)
+        else:
+            await send_reply("没有检测到股票APP，我可以用浏览器帮你操作~ 告诉我你用什么平台？", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_launch_app(payload: dict, send_func):
+    """Launch a desktop stock app directly."""
+    try:
+        from potato.browser.desktop_apps import launch_app, launch_or_browser
+        app_id = payload.get("app_id", "")
+        platform_id = payload.get("platform_id", "")
+
+        if app_id:
+            result = launch_app(app_id)
+        elif platform_id:
+            result = launch_or_browser(platform_id)
+        else:
+            result = {"ok": False, "error": "需要 app_id 或 platform_id"}
+
+        await send_func("app_launch_result", result)
+        if result.get("ok"):
+            await send_reply(f"已打开 {result.get('app', '')}！🥔", "happy", send_func)
+        elif result.get("mode") == "browser_fallback":
+            await send_reply("没找到桌面APP，帮你用浏览器打开~", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_cleanup_memory(send_func):
+    try:
+        result = brain.memory.cleanup_expired()
+        await send_func("memory_cleanup", result)
+        deleted = result.get("expired_deleted", 0)
+        if deleted > 0:
+            await send_reply(f"清理了 {deleted} 条过期记忆~ 脑袋清爽了！🥔", "happy", send_func)
+        else:
+            await send_reply("记忆都很新鲜，不需要清理~", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+_CLEANUP_SAFE_DIRS = {
+    "quick": [
+        (r"$env:TEMP", "系统临时文件"),
+        (r"$env:LOCALAPPDATA\Temp", "用户临时文件"),
+        (r"C:\Windows\Temp", "Windows临时文件"),
+        (r"$env:LOCALAPPDATA\Microsoft\Windows\INetCache", "IE缓存"),
+    ],
+    "deep": [
+        (r"$env:TEMP", "系统临时文件"),
+        (r"$env:LOCALAPPDATA\Temp", "用户临时文件"),
+        (r"C:\Windows\Temp", "Windows临时文件"),
+        (r"$env:LOCALAPPDATA\Microsoft\Windows\INetCache", "IE缓存"),
+        (r"$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache", "Chrome缓存"),
+        (r"$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache", "Edge缓存"),
+        (r"$env:LOCALAPPDATA\Mozilla\Firefox\Profiles\*\cache2", "Firefox缓存"),
+        (r"$env:LOCALAPPDATA\pip\Cache", "pip缓存"),
+        (r"$env:LOCALAPPDATA\npm-cache", "npm缓存"),
+        (r"$env:USERPROFILE\.nuget\packages", "NuGet缓存"),
+    ],
+    "full": [],
+}
+_CLEANUP_SAFE_DIRS["full"] = _CLEANUP_SAFE_DIRS["quick"] + _CLEANUP_SAFE_DIRS["deep"]
+
+
+def powershell_escape(s: str) -> str:
+    s = s.replace("'", "''")
+    return f"'{s}'"
+
+
+async def handle_cleanup_pc(payload: dict, send_func):
+    level = payload.get("level", "quick")
+    if level not in ("quick", "deep", "full"):
+        level = "quick"
+    targets = _CLEANUP_SAFE_DIRS.get(level, _CLEANUP_SAFE_DIRS["quick"])
+    total_freed = 0
+    total_deleted = 0
+    details = []
+
+    await _emit_step(send_func, "cleanup_pc", "running", f"开始{level}级清理...")
+
+    import subprocess
+    import asyncio as _asyncio
+    import re as _re
+    _SAFE_DIR_RE = _re.compile(r'^[A-Za-z]:\\[^\x00-\x1f;|`$(){}!<>"\']*\\$')
+    _PROTECTED_DIRS = ("\\windows\\system32", "\\program files", "\\program files (x86)",
+                       "\\users\\all users", "\\desktop", "\\documents", "\\pictures")
+
+    for dir_pattern, label in targets:
+        try:
+            expand_proc = await _asyncio.create_subprocess_exec(
+                "powershell", "-NoProfile", "-Command",
+                f"Write-Output ([Environment]::ExpandEnvironmentVariables('{dir_pattern}'))",
+                stdout=_asyncio.subprocess.PIPE, stderr=_asyncio.subprocess.PIPE,
+            )
+            await expand_proc.wait()
+            expand_out = (await expand_proc.stdout.read()).decode("utf-8", errors="replace").strip()
+            target_dir = expand_out if expand_proc.returncode == 0 and expand_out else dir_pattern
+
+            if not _SAFE_DIR_RE.match(target_dir):
+                details.append(f"{label}: 路径不安全，跳过")
+                continue
+            target_lower = target_dir.lower()
+            if any(d in target_lower for d in _PROTECTED_DIRS):
+                details.append(f"{label}: 受保护路径，跳过")
+                continue
+
+            size_result = await _asyncio.create_subprocess_exec(
+                "powershell", "-NoProfile", "-Command",
+                f'$dir = {powershell_escape(target_dir)}; '
+                f'if (Test-Path $dir) {{ '
+                f'$size = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum; '
+                f'$count = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue).Count; '
+                f'Write-Output "$size|$count" '
+                f'}} else {{ Write-Output "0|0" }}',
+                stdout=_asyncio.subprocess.PIPE, stderr=_asyncio.subprocess.PIPE,
+            )
+            await size_result.wait()
+
+            del_result = await _asyncio.create_subprocess_exec(
+                "powershell", "-NoProfile", "-Command",
+                f'$dir = {powershell_escape(target_dir)}; '
+                f'if (Test-Path $dir) {{ '
+                f'Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue '
+                f'}}',
+                stdout=_asyncio.subprocess.PIPE, stderr=_asyncio.subprocess.PIPE,
+            )
+            await del_result.wait()
+
+            size_stdout = await size_result.stdout.read()
+            size_bytes = 0
+            file_count = 0
+            try:
+                size_text = size_stdout.decode("utf-8", errors="replace").strip()
+                if "|" in size_text:
+                    parts = size_text.split("|")
+                    size_bytes = int(float(parts[0])) if parts[0].strip() else 0
+                    file_count = int(float(parts[1])) if parts[1].strip() else 0
+            except (ValueError, IndexError):
+                pass
+
+            if file_count == 0 and size_bytes == 0:
+                details.append(f"{label}: 已是干净")
+                continue
+
+            freed_mb = round(size_bytes / 1024 / 1024, 1)
+            total_freed += freed_mb
+            total_deleted += file_count
+            details.append(f"{label}: 清理{file_count}个文件, 释放{freed_mb}MB")
+            await _emit_step(send_func, "cleanup_pc", "running",
+                             f"{label}: 清理{file_count}个文件, 释放{freed_mb}MB")
+
+        except Exception as e:
+            details.append(f"{label}: 跳过({str(e)[:40]})")
+
+    if level in ("deep", "full"):
+        try:
+            await _emit_step(send_func, "cleanup_pc", "running", "正在清空回收站...")
+            proc = await _asyncio.create_subprocess_exec(
+                "powershell", "-NoProfile", "-Command",
+                "Clear-RecycleBin -Force -ErrorAction SilentlyContinue",
+                stdout=_asyncio.subprocess.PIPE, stderr=_asyncio.subprocess.PIPE,
+            )
+            await proc.wait()
+            details.append("回收站: 已清空")
+        except Exception:
+            pass
+
+    if level == "full":
+        try:
+            await _emit_step(send_func, "cleanup_pc", "running", "正在磁盘清理...")
+            proc = await _asyncio.create_subprocess_exec(
+                "cleanmgr", "/sagerun:1",
+                stdout=_asyncio.subprocess.PIPE, stderr=_asyncio.subprocess.PIPE,
+            )
+            await proc.wait()
+            details.append("磁盘清理: 已启动")
+        except Exception:
+            pass
+
+    summary = f"清理完成！共清理{total_deleted}个文件，释放约{total_freed}MB空间"
+    await send_func("cleanup_result", {
+        "level": level,
+        "total_freed_mb": total_freed,
+        "total_files": total_deleted,
+        "details": details,
+    })
+    await _emit_step(send_func, "cleanup_pc", "done", summary)
+    await send_reply(f"电脑清理好啦！{summary} 🥔✨", "happy", send_func)
+
+
+async def handle_get_memory(payload: dict, send_func):
+    try:
+        keyword = payload.get("keyword", "")
+        if keyword:
+            memories = brain.memory.search_memories(keyword)
+            categorized = []
+            for m in memories:
+                cat = m.get("category", "")
+                cat_name = m.get("category_name", cat)
+                m["category_display"] = cat_name
+                categorized.append(m)
+            await send_func("memory_search", {"keyword": keyword, "results": categorized})
+        else:
+            facts = brain.memory.get_all_facts()
+            facts_by_cat = {}
+            for k, v in brain.memory.facts.items():
+                if isinstance(v, dict):
+                    cat = v.get("category", "other")
+                    val = v.get("value", "")
+                else:
+                    cat = "other"
+                    val = str(v)
+                if cat not in facts_by_cat:
+                    facts_by_cat[cat] = {}
+                facts_by_cat[cat][k] = val
+            hot = brain.memory.get_hot_memories(limit=10)
+            summaries = brain.memory.get_recent_summaries(limit=3)
+            await send_func("memory_overview", {
+                "facts": facts,
+                "facts_by_category": facts_by_cat,
+                "hot_count": len(hot),
+                "summaries_count": len(summaries),
+                "categories": list(brain.memory.facts.keys()) if hasattr(brain.memory, 'facts') else [],
+            })
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_vault_store(payload: dict, send_func):
+    """Store a key in the vault and refresh runtime config."""
+    try:
+        from potato.vault import Vault
+        from services import _reset_main_client, _reset_audio_client
+        vault = Vault()
+        key = payload.get("key", "")
+        value = payload.get("value", "")
+        if not key or not value:
+            await send_func("error", {"info": "需要 key 和 value"})
+            return
+        key_upper = key.strip().upper()
+        is_url = value.strip().startswith("http")
+        from potato.vault import KNOWN_KEYS as _KNS
+        key_desc = _KNS.get(key_upper, {}).get("desc", key_upper)
+        if is_url and "DEEPSEEK" in key_upper:
+            await send_func("error", {"info": f"这是网址不是密钥哦~ 请在 {value.strip()} 生成真正的 API Key（以 sk- 开头），再粘贴给我就行！🥔"})
+            return
+        result = vault.store(
+            key=key_upper, value=value,
+            category=payload.get("category", ""),
+            platform_id=payload.get("platform_id", ""),
+            description=payload.get("description", ""),
+        )
+        if key_upper == "DEEPSEEK_API_KEY":
+            Config.LLM_API_KEY = value
+            _reset_main_client()
+        elif key_upper == "SILICON_API_KEY":
+            Config.SILICON_KEY = value
+            _reset_audio_client()
+        elif key_upper == "LINER_API_KEY":
+            Config.LINER_KEY = value
+            _reset_main_client()
+        elif key_upper == "OPENAI_API_KEY":
+            Config.OPENAI_KEY = value
+            _reset_main_client()
+        elif key_upper in ("BYTEBOT_AGENT_URL", "BYTEBOT_DESKTOP_URL"):
+            from bytebot_client import _bytebot_client
+            _bytebot_client.agent_url = None
+            _bytebot_client.desktop_url = None
+        await send_func("vault_stored", result)
+        await send_reply(f"{key_desc} 存好了！现在可以用了~ 🥔", "happy", send_func)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_vault_list(payload: dict, send_func):
+    try:
+        from potato.vault import Vault
+        keys = Vault().list_keys(payload.get("category", ""))
+        await send_func("vault_keys", {"keys": keys, "count": len(keys)})
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_vault_delete(payload: dict, send_func):
+    try:
+        from potato.vault import Vault
+        Vault().delete(payload.get("key", ""))
+        await send_func("vault_deleted", {"key": payload.get("key", "")})
+        await send_reply(f"密钥已从保险箱删除~ 🥔", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_vault_status(send_func):
+    try:
+        from potato.vault import Vault
+        vault = Vault()
+        status = vault.status()
+        await send_func("vault_status", status)
+        total = status["total_keys"]
+        missing = status["missing_required"]
+        if missing:
+            names = ", ".join(m["desc"] for m in missing[:3])
+            await send_reply(f"保险箱有 {total} 个密钥。还缺: {names}~ 给我就能用了！🥔", "neutral", send_func)
+        else:
+            await send_reply(f"保险箱有 {total} 个密钥，核心密钥齐全！🥔", "happy", send_func)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_open_renewal_url(payload: dict, send_func):
+    """Open a provider's renewal/dashboard URL in the user's browser."""
+    try:
+        key_name = payload.get("key", "").strip().upper()
+        from potato.vault import KNOWN_KEYS
+        key_meta = KNOWN_KEYS.get(key_name, {})
+        renewal_url = key_meta.get("renewal_url") or key_meta.get("dashboard_url", "")
+        if not renewal_url:
+            dashboard_url = key_meta.get("dashboard_url", "")
+            if dashboard_url:
+                renewal_url = dashboard_url
+        if not renewal_url:
+            await send_reply(f"找不到 {key_name} 的续费链接，请手动到对应平台续费~ 🥔", "neutral", send_func)
+            return
+        import webbrowser
+        webbrowser.open(renewal_url)
+        desc = key_meta.get("desc", key_name)
+        await send_func("renewal_opened", {"key": key_name, "url": renewal_url})
+        await send_reply(f"已帮你打开 {desc} 的续费页面！按提示充值就行~ 🥔", "happy", send_func)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_credential_grant(payload: dict, send_func):
+    """Store platform credentials → switch to autonomous mode."""
+    try:
+        from potato.credentials import CredentialsPlugin
+        from potato.config import load_settings
+        platform_id = payload.get("platform_id", "")
+        credentials = payload.get("credentials", {})
+        if not platform_id or not credentials:
+            await send_func("error", {"info": "需要 platform_id 和 credentials"})
+            return
+        plugin = CredentialsPlugin(load_settings())
+        result = plugin.grant(platform_id, credentials)
+        await send_func("credential_granted", result)
+        await send_reply(
+            f"已收到你的 {platform_id} 凭证！以后我可以自动登录帮你操盘了~ 🥔",
+            "happy", send_func,
+        )
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_credential_revoke(payload: dict, send_func):
+    """Remove platform credentials → switch back to assisted mode."""
+    try:
+        from potato.credentials import CredentialsPlugin
+        from potato.config import load_settings
+        platform_id = payload.get("platform_id", "")
+        if not platform_id:
+            await send_func("error", {"info": "需要 platform_id"})
+            return
+        plugin = CredentialsPlugin(load_settings())
+        result = plugin.revoke(platform_id)
+        await send_func("credential_revoked", result)
+        await send_reply(
+            f"已收回 {platform_id} 的自动登录权限，下次需要你手动登录~ 🥔",
+            "neutral", send_func,
+        )
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_credential_status(send_func):
+    """Show which platforms are in autonomous vs assisted mode."""
+    try:
+        from potato.credentials import CredentialsPlugin
+        from potato.config import load_settings
+        plugin = CredentialsPlugin(load_settings())
+        status = plugin.permission_status()
+        await send_func("credential_status", {"platforms": status})
+        if not status:
+            await send_reply("还没有给任何平台授权哦~ 给我账号密码我就能自动登录操盘！🥔", "neutral", send_func)
+        else:
+            auto = [pid for pid, s in status.items() if s["mode"] == "autonomous"]
+            assisted = [pid for pid, s in status.items() if s["mode"] == "assisted"]
+            msg = ""
+            if auto:
+                msg += f"自主操盘: {', '.join(auto)}（已给凭证）"
+            if assisted:
+                msg += f"  需要登录: {', '.join(assisted)}"
+            await send_reply(msg, "happy", send_func)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_credential_schemas(send_func):
+    """Show what fields each platform needs for credentials."""
+    try:
+        from potato.credentials import CredentialsPlugin
+        schemas = CredentialsPlugin.all_field_schemas()
+        await send_func("credential_schemas", {"platforms": schemas})
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+_voice_call_session = None
+_current_voice_profile = "yujie"
+
+
+async def handle_voice_call_start(payload: dict, send_func):
+    """Start a real-time voice conversation session."""
+    global _voice_call_session
+    try:
+        from potato.voice import VoiceCallSession
+        profile = payload.get("voice_profile", _current_voice_profile)
+        _voice_call_session = VoiceCallSession(profile_id=profile)
+        result = await _voice_call_session.start()
+        await send_func("voice_call_started", result)
+        await send_reply("语音通话已开启，说吧~", "happy", send_func)
+    except Exception as e:
+        await send_func("error", {"info": f"Voice call start failed: {e}"})
+
+
+async def handle_voice_call_audio(payload: dict, send_func):
+    """Process one audio turn in voice call: STT → AI → TTS."""
+    global _voice_call_session
+    if not _voice_call_session or not _voice_call_session.is_active:
+        await send_func("error", {"info": "No active voice call"})
+        return
+
+    audio_b64 = payload.get("audio_base64", "")
+    if not audio_b64:
+        return
+
+    brain.state = "thinking"
+    await send_func("state_update", {"state": "thinking"})
+
+    try:
+        turn = await _voice_call_session.process_audio_turn(audio_b64)
+        user_text = turn.get("user_text", "")
+
+        if not user_text:
+            brain.state = "idle"
+            await send_func("state_update", {"state": "idle"})
+            return
+
+        await send_func("voice_stt_result", {"text": user_text})
+        await handle_user_input(user_text, send_func)
+
+    except Exception as e:
+        await send_reply(f"语音处理出错: {e}", "neutral", send_func)
+        brain.state = "idle"
+        await send_func("state_update", {"state": "idle"})
+
+
+async def handle_voice_call_end(send_func):
+    global _voice_call_session
+    if _voice_call_session:
+        result = await _voice_call_session.end()
+        _voice_call_session = None
+        await send_func("voice_call_ended", result)
+        await send_reply("语音通话结束了~", "neutral", send_func)
+    else:
+        await send_func("voice_call_ended", {"ok": True, "turns": 0})
+
+
+async def handle_set_voice(payload: dict, send_func):
+    global _current_voice_profile
+    try:
+        from potato.voice import VOICE_PROFILES, get_voice_profile
+        profile_id = payload.get("profile_id", "yujie")
+        if profile_id in VOICE_PROFILES:
+            _current_voice_profile = profile_id
+            profile = get_voice_profile(profile_id)
+            await send_func("voice_changed", {"profile_id": profile_id, "name": profile["name"]})
+            await send_reply(f"声音已切换到「{profile['name']}」模式~ {profile['description']}", "happy", send_func)
+        else:
+            available = list(VOICE_PROFILES.keys())
+            await send_func("error", {"info": f"Unknown voice: {profile_id}", "available": available})
+    except ImportError:
+        await send_func("error", {"info": "语音模块未安装，无法切换声音"})
+
+
+async def handle_list_voices(send_func):
+    try:
+        from potato.voice import VOICE_PROFILES
+        voices = {k: {"name": v["name"], "description": v["description"]} for k, v in VOICE_PROFILES.items()}
+        await send_func("voice_list", {"voices": voices, "current": _current_voice_profile})
+    except ImportError:
+        await send_func("voice_list", {"voices": {}, "current": _current_voice_profile})
+
+
+async def handle_bytebot_task(payload: dict, send_func):
+    """Create a Bytebot task and poll until completion."""
+    description = payload.get("description", "")
+    if not description:
+        await send_func("error", {"info": "需要指定任务描述"})
+        return
+
+    await send_func("state_update", {"state": "thinking"})
+    await send_reply(f"正在创建 Bytebot 任务: {description[:80]}...", "happy", send_func)
+
+    try:
+        client = get_bytebot_client()
+
+        if not await client.is_available():
+            await send_reply("Bytebot 服务不可用，请确认 Docker 已启动（端口 9991）— 可在保险箱配置 BYTEBOT_AGENT_URL 🥔", "neutral", send_func)
+            brain.state = "idle"
+            await send_func("state_update", {"state": "idle"})
+            return
+
+        model = payload.get("model")
+        priority = payload.get("priority", "MEDIUM")
+        task = await client.create_task(description, priority=priority, model=model)
+
+        task_id = task.get("id")
+        if not task_id:
+            await send_reply(f"创建任务失败: {task.get('error', '未知错误')} 🥔", "neutral", send_func)
+            brain.state = "idle"
+            await send_func("state_update", {"state": "idle"})
+            return
+
+        await send_func("bytebot_task_created", {
+            "task_id": task_id, "description": description, "status": task.get("status", "PENDING"),
+        })
+        await send_reply(f"Bytebot 任务已创建 (ID: {task_id[:8]}...), 正在执行...", "happy", send_func)
+
+        from bytebot_client import poll_task_until_done
+        result_task = await poll_task_until_done(task_id, send_func)
+
+        if result_task:
+            status = result_task.get("status")
+            if status == "COMPLETED":
+                result_data = result_task.get("result", {})
+                summary = ""
+                if isinstance(result_data, dict):
+                    summary = result_data.get("summary", result_data.get("description", ""))
+                elif isinstance(result_data, str):
+                    summary = result_data[:200]
+                await send_reply(f"Bytebot 任务完成！{summary if summary else '✅'} 🥔", "happy", send_func)
+            elif status == "FAILED":
+                error = result_task.get("error", "未知错误")
+                await send_reply(f"Bytebot 任务失败了: {error} 🥔", "neutral", send_func)
+            else:
+                await send_reply(f"Bytebot 任务状态: {status}", "neutral", send_func)
+        else:
+            await send_reply("Bytebot 任务超时，可能仍在后台运行 🥔", "neutral", send_func)
+
+    except Exception as e:
+        logger.warning("Bytebot task error: %s", e)
+        await send_reply(f"Bytebot 出错: {e}", "angry", send_func)
+    finally:
+        brain.state = "idle"
+        await send_func("state_update", {"state": "idle"})
+
+
+async def handle_bytebot_status(send_func):
+    """Check Bytebot service availability and recent tasks."""
+    try:
+        client = get_bytebot_client()
+        agent_ok = await client.is_available()
+        desktop_ok = await client.is_desktop_available()
+
+        tasks = []
+        if agent_ok:
+            session = await client._get_session()
+            async with session.get(f"{client.agent_url}/tasks", params={"limit": 5}) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    tasks = data.get("tasks", [])
+
+        await send_func("bytebot_status", {
+            "agent_available": agent_ok,
+            "desktop_available": desktop_ok,
+            "recent_tasks": [
+                {"id": t.get("id", ""), "description": t.get("description", "")[:80],
+                 "status": t.get("status", ""), "created_at": t.get("createdAt", "")}
+                for t in tasks
+            ],
+        })
+
+        if not agent_ok:
+            await send_reply("Bytebot 未运行。启动方式: docker compose -f docker/docker-compose.pet.yml up -d 🥔", "neutral", send_func)
+        else:
+            status_parts = [f"Agent ✅"]
+            if desktop_ok:
+                status_parts.append("Desktop ✅")
+            else:
+                status_parts.append("Desktop ❌")
+            await send_reply(f"Bytebot 状态: {'  '.join(status_parts)}", "happy", send_func)
+
+    except Exception as e:
+        await send_func("bytebot_status", {"agent_available": False, "desktop_available": False, "error": str(e)})
+        await send_reply(f"Bytebot 状态检查失败: {e}", "neutral", send_func)
+
+
+async def handle_bytebot_desktop(payload: dict, send_func):
+    """Send a direct computer-use command to Bytebot desktop daemon, with validation."""
+    _SAFE_DESKTOP_ACTIONS = {"screenshot", "cursor_position", "click_mouse", "type_text",
+                               "paste_text", "scroll", "move_mouse", "application", "wait"}
+    _DANGEROUS_DESKTOP_ACTIONS = {"write_file", "read_file", "press_keys"}
+    _MAX_PARAM_LEN = 1000
+
+    action = str(payload.get("action", "")).strip()
+    if not action:
+        await send_func("error", {"info": "需要指定 action (screenshot, click_mouse, type_text, ...)"})
+        return
+
+    if action in _DANGEROUS_DESKTOP_ACTIONS:
+        await send_func("error", {"info": f"操作 {action} 需要用户明确确认，请通过聊天请求"})
+        logger.warning("Blocked dangerous desktop action from WS: %s", action)
+        return
+
+    if action not in _SAFE_DESKTOP_ACTIONS and action not in _DANGEROUS_DESKTOP_ACTIONS:
+        await send_func("error", {"info": f"不支持的操作: {action}"})
+        logger.warning("Unknown desktop action: %s", action)
+        return
+
+    await send_func("state_update", {"state": "thinking"})
+    try:
+        client = get_bytebot_client()
+
+        if not await client.is_desktop_available():
+            await send_reply("Bytebot Desktop 不在运行，请先启动: docker compose -f docker/docker-compose.pet.yml up -d 🥔", "neutral", send_func)
+            brain.state = "idle"
+            await send_func("state_update", {"state": "idle"})
+            return
+
+        params = {}
+        for k, v in payload.items():
+            if k == "action" or v is None:
+                continue
+            if isinstance(v, str) and len(v) > _MAX_PARAM_LEN:
+                v = v[:_MAX_PARAM_LEN]
+            params[k] = v
+        result = await client.computer_use(action, **params)
+
+        if action == "screenshot" and result.get("image"):
+            await send_func("bytebot_screenshot", {"screenshot_b64": result["image"]})
+
+        await send_func("bytebot_desktop_result", {"action": action, "result": result})
+
+        if result.get("ok") is False:
+            await send_reply(f"操作失败: {result.get('error', '未知')} 🥔", "neutral", send_func)
+        elif action == "screenshot":
+            await send_reply("截图已获取！正在分析...", "happy", send_func)
+        else:
+            await send_reply(f"{action} 操作完成 ✅", "happy", send_func)
+
+    except Exception as e:
+        await send_reply(f"Desktop 操作出错: {e}", "neutral", send_func)
+    finally:
+        brain.state = "idle"
+        await send_func("state_update", {"state": "idle"})
+
+
+async def handle_bytebot_cancel(payload: dict, send_func):
+    """Cancel a running Bytebot task."""
+    task_id = payload.get("task_id", "")
+    if not task_id:
+        await send_func("error", {"info": "需要指定 task_id"})
+        return
+    try:
+        client = get_bytebot_client()
+        result = await client.cancel_task(task_id)
+        if result:
+            await send_func("bytebot_task_cancelled", {"task_id": task_id, "status": result.get("status")})
+            await send_reply(f"Bytebot 任务 {task_id[:8]}... 已取消", "neutral", send_func)
+        else:
+            await send_reply(f"取消任务失败（可能已完成或不存在）🥔", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_bytebot_message(payload: dict, send_func):
+    """Send a guidance message to a running Bytebot task."""
+    task_id = payload.get("task_id", "")
+    message = payload.get("message", "")
+    if not task_id or not message:
+        await send_func("error", {"info": "需要 task_id 和 message"})
+        return
+    try:
+        client = get_bytebot_client()
+        result = await client.add_message(task_id, message)
+        if result:
+            await send_reply(f"已向 Bytebot 任务发送指导~ 🥔", "happy", send_func)
+        else:
+            await send_reply("发送失败，任务可能已结束~", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": str(e)})
+
+
+async def handle_trade_analysis(payload: dict, send_func):
+    global _trading_scheduler
+    if not _trading_scheduler:
+        _trading_scheduler = TradingScheduler(send_func)
+    symbols = payload.get("symbols", [])
+    if not symbols:
+        from potato.user_prefs import UserPrefs
+        prefs = UserPrefs()
+        symbols = prefs.get("watchlist", [])[:5]
+    if not symbols:
+        symbols = ["000001", "600519", "000858", "601318", "000333"]
+    try:
+        brain.state = "thinking"
+        await send_func("state_update", {"state": "thinking"})
+        user_prefs = {}
+        try:
+            from potato.user_prefs import UserPrefs
+            up = UserPrefs()
+            user_prefs = {"risk_level": up.get("risk_level", ""), "watchlist": up.get("watchlist", []), "sectors": up.get("sectors", [])}
+        except Exception:
+            pass
+        result = await _trading_scheduler.run_manual_analysis(
+            symbols=symbols,
+            user_prefs=user_prefs,
+        )
+        if result.get("ok"):
+            analysis = result.get("analysis", {})
+            picks = analysis.get("stock_picks", [])
+            formatted = format_trade_decision_for_pet(result)
+            await send_func("trade_analysis", {
+                "analysis": analysis,
+                "formatted": formatted,
+                "symbols": symbols,
+            })
+            for pick in picks:
+                if pick.get("action") in ("BUY", "SELL"):
+                    signal = format_trade_signal_message(pick)
+                    if signal:
+                        await send_func("trade_signal", {
+                            "symbol": pick.get("symbol", ""),
+                            "name": pick.get("name", ""),
+                            "action": pick.get("action", ""),
+                            "confidence": pick.get("confidence", 0),
+                            "message": signal,
+                        })
+        else:
+            await send_func("error", {"info": f"分析失败: {result.get('error', '')}"})
+    except Exception as e:
+        logger.warning("Trade analysis error: %s", e)
+        await send_func("error", {"info": str(e)})
+    finally:
+        brain.state = "idle"
+        await send_func("state_update", {"state": "idle"})
+
+
+async def handle_trade_execute(payload: dict, send_func):
+    global _trading_scheduler
+    if not _trading_scheduler:
+        _trading_scheduler = TradingScheduler(send_func)
+    pick = payload.get("pick", {})
+    if not pick:
+        await send_func("error", {"info": "需要交易信息(pick)"})
+        return
+    try:
+        brain.state = "thinking"
+        await send_func("state_update", {"state": "thinking"})
+        user_prefs = {}
+        try:
+            from potato.user_prefs import UserPrefs
+            up = UserPrefs()
+            user_prefs = {
+                "risk_level": up.get("risk_level", ""),
+                "max_single_cny": up.get("max_single_trade_cny", "50"),
+                "platform_id": payload.get("platform_id", "eastmoney"),
+            }
+        except Exception:
+            pass
+        result = await _trading_scheduler.execute_trade_decision(pick, user_prefs)
+        await send_func("trade_result", result)
+        if result.get("ok"):
+            await send_reply(f"交易已提交！{result.get('action','')} {result.get('symbol','')} 🥔", "happy", send_func)
+        else:
+            await send_reply(f"交易被拦截: {result.get('reason', '')} 🥔", "neutral", send_func)
+    except Exception as e:
+        logger.warning("Trade execute error: %s", e)
+        await send_func("error", {"info": str(e)})
+    finally:
+        brain.state = "idle"
+        await send_func("state_update", {"state": "idle"})
+
+
+async def handle_trade_auto_start(payload: dict, send_func):
+    global _trading_scheduler
+    if _trading_scheduler and _trading_scheduler._running:
+        _trading_scheduler.send_func = send_func
+        await send_func("trade_auto_status", {"running": True, "status": _trading_scheduler.get_status()})
+        return
+    _trading_scheduler = TradingScheduler(send_func)
+    _trading_scheduler.start()
+    await send_func("trade_auto_status", {"running": True, "status": _trading_scheduler.get_status()})
+    await send_reply("自动操盘已启动！我会按盘前→开盘→午间→尾盘→盘后流程自动运转 🥔📈", "happy", send_func)
+
+
+async def handle_trade_auto_stop(send_func):
+    global _trading_scheduler
+    if _trading_scheduler:
+        _trading_scheduler.stop()
+    await send_func("trade_auto_status", {"running": False})
+    await send_reply("自动操盘已停止 🥔", "neutral", send_func)
+
+
+async def handle_trade_status(send_func):
+    global _trading_scheduler
+    if _trading_scheduler:
+        await send_func("trade_auto_status", _trading_scheduler.get_status())
+    else:
+        await send_func("trade_auto_status", {"running": False, "trades_today": 0, "total_trades": 0})
+
+
+_journal = TradeJournal()
+
+
+async def handle_trade_review(payload: dict, send_func):
+    try:
+        date_str = payload.get("date") if isinstance(payload, dict) else None
+        review = _journal.generate_daily_review(date_str)
+        trades = _journal.get_recent_trades(20)
+        trade_lines = []
+        for t in trades:
+            icon = "✅" if t.realized_pnl > 0 else ("❌" if t.realized_pnl < 0 else "➖")
+            trade_lines.append(
+                f"{icon} {t.symbol} {t.name} {t.direction} "
+                f"¥{t.entry_price}→¥{t.exit_price} P&L=¥{t.realized_pnl}({t.realized_pnl_pct:.1f}%) "
+                f"置信度{float(t.confidence):.0%} 持仓{t.hold_duration_minutes}分钟"
+            )
+        summary = (
+            f"📊 复盘: {review.total_trades}笔 "
+            f"胜率{review.win_rate}% "
+            f"盈亏¥{review.total_pnl} "
+            f"利润因子{review.profit_factor} "
+            f"最大回撤{review.max_drawdown_pct}%\n"
+        )
+        if trade_lines:
+            summary += "逐笔:\n" + "\n".join(trade_lines[:10])
+        for lesson in review.ai_lessons:
+            summary += f"\n💡 {lesson}"
+
+        await send_func("trade_review", {
+            "date": review.date,
+            "total_trades": review.total_trades,
+            "winning": review.winning_trades,
+            "losing": review.losing_trades,
+            "win_rate": str(review.win_rate),
+            "total_pnl": str(review.total_pnl),
+            "profit_factor": str(review.profit_factor),
+            "max_drawdown_pct": str(review.max_drawdown_pct),
+            "lessons": review.ai_lessons,
+            "trades": [t.to_dict() for t in trades[:20]],
+            "summary": summary,
+        })
+    except Exception as e:
+        logger.error("trade_review error: %s", e)
+        await send_func("error", {"info": f"复盘失败: {e}"})
+
+
+async def handle_position_status(payload: dict, send_func):
+    try:
+        positions = _journal.get_open_positions_summary()
+        summary = f"📈 当前持仓{len(positions)}只"
+        for p in positions:
+            summary += f"\n  {p['name']}({p['symbol']}) {p['direction']} 入场¥{p['entry_price']} 目标¥{p['target_price']} 止损¥{p['stop_loss_price']}"
+        await send_func("position_status", {
+            "positions": positions,
+            "count": len(positions),
+            "summary": summary,
+        })
+    except Exception as e:
+        logger.error("position_status error: %s", e)
+        await send_func("error", {"info": f"持仓查询失败: {e}"})
+
+
+async def handle_close_position(payload: dict, send_func):
+    try:
+        trade_id = payload.get("trade_id", "") if isinstance(payload, dict) else ""
+        exit_price_str = payload.get("exit_price", "0") if isinstance(payload, dict) else "0"
+        exit_reason = payload.get("reason", "manual") if isinstance(payload, dict) else "manual"
+        if not trade_id:
+            await send_func("error", {"info": "平仓需要trade_id"})
+            return
+        from decimal import Decimal
+        exit_price = Decimal(str(exit_price_str)) if exit_price_str else Decimal("0")
+        if exit_price <= 0:
+            try:
+                from potato.trading.analyzer import fetch_realtime_quote as _frq
+                symbol = trade_id.split("_")[0]
+                quote = await _frq(symbol)
+                if quote and quote.get("price"):
+                    exit_price = Decimal(str(quote["price"]))
+            except Exception:
+                pass
+        rec = _journal.record_exit(trade_id, exit_price, exit_reason)
+        if rec:
+            icon = "✅赚" if rec.realized_pnl > 0 else "❌亏"
+            summary = (
+                f"{icon} 平仓 {rec.name}({rec.symbol}) "
+                f"¥{rec.entry_price}→¥{rec.exit_price} "
+                f"P&L=¥{rec.realized_pnl}({rec.realized_pnl_pct:.1f}%) "
+                f"持仓{rec.hold_duration_minutes}分钟"
+            )
+            await send_func("close_position", {
+                "trade_id": rec.id,
+                "symbol": rec.symbol,
+                "name": rec.name,
+                "entry_price": str(rec.entry_price),
+                "exit_price": str(rec.exit_price),
+                "realized_pnl": str(rec.realized_pnl),
+                "realized_pnl_pct": str(rec.realized_pnl_pct),
+                "hold_duration_minutes": rec.hold_duration_minutes,
+                "exit_reason": rec.exit_reason,
+                "prediction_correct": rec.prediction_correct,
+                "stop_hit": rec.stop_hit,
+                "target_hit": rec.target_hit,
+                "summary": summary,
+            })
+        else:
+            await send_func("error", {"info": f"未找到持仓{trade_id}"})
+    except Exception as e:
+        logger.error("close_position error: %s", e)
+        await send_func("error", {"info": f"平仓失败: {e}"})
+
+
+async def handle_review_history(payload: dict, send_func):
+    try:
+        days = int(payload.get("days", 7)) if isinstance(payload, dict) else 7
+        trades = _journal.get_recent_trades(n=100)
+        if not trades:
+            await send_func("review_history", {"trades": [], "summary": "暂无交易记录"})
+            return
+
+        total_pnl = sum(float(t.realized_pnl) for t in trades)
+        wins = len([t for t in trades if t.realized_pnl > 0])
+        total = len(trades)
+        win_rate = round(wins / total * 100, 1) if total else 0
+
+        summary = f"📋 近{days}天: {total}笔交易 胜率{win_rate}% 总盈亏¥{total_pnl:.2f}"
+
+        await send_func("review_history", {
+            "trades": [t.to_dict() for t in trades[:50]],
+            "total_pnl": str(round(total_pnl, 2)),
+            "win_rate": str(win_rate),
+            "total_trades": total,
+            "winning": wins,
+            "consecutive_losses": _journal.get_consecutive_losses(),
+            "summary": summary,
+        })
+    except Exception as e:
+        logger.error("review_history error: %s", e)
+        await send_func("error", {"info": f"历史查询失败: {e}"})
+
+
+async def game_loop(ws, send_func):
+    """Autonomous awareness — proactive analysis and trading reminders."""
+    logger.info("小土豆自主意识启动 (proactive loop)")
+
+    while True:
+        await asyncio.sleep(1)
+        now = time.time()
+
+        if (
+            not brain.is_dnd_mode
+            and brain.state == "idle"
+            and now - brain.last_interaction > brain.current_threshold
+        ):
+            brain.increase_boredom_time()
+            brain.state = "thinking"
+            await send_func("state_update", {"state": "thinking"})
+            brain.last_interaction = now
+
+            try:
+                sys_prompt = await brain.build_system_prompt()
+                last_active = datetime.datetime.fromtimestamp(brain.last_user_input_time).strftime("%H:%M:%S")
+                trigger = f"""(系统触发：用户静默中，最后活跃 {last_active}。
+可以：1) 汇报最新分析 2) 提醒查看股票 3) 主动聊天。返回 JSON。)"""
+
+                msgs = [sys_prompt] + brain.history + [{"role": "user", "content": trigger}]
+                result_json = await AIService.chat_with_potato_brain(msgs)
+
+                if result_json.get("quota_exhausted"):
+                    from potato.vault import KNOWN_KEYS as _VK
+                    providers = result_json.get("quota_providers", [])
+                    renewal_info = []
+                    for qi in providers:
+                        pname = qi.get("provider", "")
+                        rurl = qi.get("renewal_url", "")
+                        key_env = ""
+                        for p in PROVIDERS:
+                            if p.get("name") == pname:
+                                key_env = p.get("key_env", "")
+                                break
+                        key_meta = _VK.get(key_env, {})
+                        renewal_info.append({
+                            "provider": pname,
+                            "renewal_url": rurl,
+                            "key_env": key_env,
+                            "key_desc": key_meta.get("desc", key_env),
+                            "dashboard_url": key_meta.get("dashboard_url", rurl),
+                        })
+                    await send_func("quota_exhausted", {
+                        "providers": renewal_info,
+                        "message": f"你的 {', '.join(p['key_desc'] for p in renewal_info)} 额度已用完，需要续费才能继续使用哦~",
+                    })
+                    brain.state = "idle"
+                    await send_func("state_update", {"state": "idle"})
+                    await asyncio.sleep(300)
+                    continue
+
+                reply = result_json.get("reply")
+                emotion = result_json.get("emotion", "neutral")
+
+                if reply:
+                    ai_time = datetime.datetime.now().strftime("[%H:%M:%S]")
+                    brain.history.append({"role": "assistant", "content": f"{ai_time} {reply}"})
+                    brain.history = brain.history[-12:]
+                    await send_reply(reply, emotion, send_func)
+
+            except Exception as e:
+                logger.warning("Proactive speech failed: %s", e)
+            finally:
+                brain.state = "idle"
+                await send_func("state_update", {"state": "idle"})
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
+        lifespan="on",
+        loop="asyncio",
+        log_level="info",
+        timeout_graceful_shutdown=5,
+    )

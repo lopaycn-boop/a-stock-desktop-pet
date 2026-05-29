@@ -1,0 +1,69 @@
+{
+  "name": "potato-desktop-pet",
+  "version": "1.0.0",
+  "description": "小土豆 AI操盘桌宠 — 自主交易+全电脑操控+Live2D",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.openclaw.potato-pet",
+    "productName": "小土豆 AI操盘桌宠",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "../frontend/dist/**/*",
+      "../backend/**/*",
+      "../potato/**/*",
+      "!../**/__pycache__/**",
+      "!../**/node_modules/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": ["**/*", "!__pycache__/**"]
+      },
+      {
+        "from": "../potato",
+        "to": "potato",
+        "filter": ["**/*", "!__pycache__/**"]
+      },
+      {
+        "from": "../data",
+        "to": "data"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": true,
+      "allowElevation": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "installerLanguages": ["zh-CN"],
+      "language": 2052,
+      "installerIcon": "assets/icon.png",
+      "unicode": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  }
+}

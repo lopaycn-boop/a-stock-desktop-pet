@@ -1,0 +1,16 @@
+.git
+.venv
+__pycache__
+*.pyc
+node_modules
+.env
+*.db
+data/
+*.log
+desktop_pet/frontend/node_modules
+desktop_pet/frontend/release
+desktop_pet/frontend/dist
+desktop_pet/frontend/.vite
+desktop_pet/frontend/python
+desktop_pet/backend/memory_db
+desktop_pet/backend/user_facts.json

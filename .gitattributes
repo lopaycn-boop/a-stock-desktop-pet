@@ -1,0 +1,5 @@
+.env filter=gitcrypt diff=gitcrypt
+.env.* filter=gitcrypt diff=gitcrypt
+*.pem filter=gitcrypt diff=gitcrypt
+*.key filter=gitcrypt diff=gitcrypt
+*.crt filter=gitcrypt diff=gitcrypt

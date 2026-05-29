@@ -1,0 +1,1 @@
+"""Desktop pet backend — WebSocket bridge between Live2D UI and AI trading brain."""
