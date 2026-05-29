@@ -142,20 +142,19 @@ def _encrypt(value: str) -> str:
 
 
 def _decrypt(encoded: str) -> str:
-    """Decrypt a value. Tries Fernet first, falls back to base64 for legacy data migration.
-    Raises RuntimeError if both fail — never returns the raw encoded string as plaintext."""
+    """Decrypt a value using Fernet encryption.
+
+    Raises RuntimeError if decryption fails — compromised or wrong-key data
+    is never silently decoded as plaintext."""
     cipher = _get_cipher()
-    if cipher is not None:
-        try:
-            return cipher.decrypt(encoded.encode("ascii")).decode("utf-8")
-        except Exception as exc:
-            logger.warning("Fernet decryption failed, trying base64: %s", exc)
+    if cipher is None:
+        raise RuntimeError("Vault decryption failed: no encryption key available. Set VAULT_ENCRYPTION_KEY.")
     try:
-        return base64.b64decode(encoded.encode("ascii")).decode("utf-8")
+        return cipher.decrypt(encoded.encode("ascii")).decode("utf-8")
     except Exception as exc:
         raise RuntimeError(
-            f"Vault decryption failed: value is neither Fernet-encrypted nor valid base64. "
-            f"Data may be corrupted or encrypted with a different key. Error: {exc}"
+            f"Vault decryption failed: data may be corrupted or encrypted with a different key. "
+            f"Error: {exc}"
         ) from exc
 
 

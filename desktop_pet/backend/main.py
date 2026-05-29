@@ -929,7 +929,7 @@ async def handle_user_input(text: str, send_func):
 
     except Exception as e:
         logger.warning("Handle error: %s", e)
-        await send_func("chat", {"text": f"出了点小问题：{str(e)[:100]}", "expression": "sad"})
+        await send_func("chat", {"text": f"出了点小问题：{_safe_error(e)}", "expression": "sad"})
     finally:
         brain.state = "idle"
         brain.last_interaction = time.time()
@@ -1116,7 +1116,7 @@ async def _process_ai_actions(actions: dict, send_func):
                         await _emit_step(send_func, "update_risk", "error", "没有需要更新的参数")
                 except Exception as e:
                     logger.warning("update_risk error: %s", e)
-                    await _emit_step(send_func, "update_risk", "error", str(e)[:60])
+                    await _emit_step(send_func, "update_risk", "error", _safe_error(e))
             else:
                 await _emit_step(send_func, "update_risk", "error", "需要dict格式")
 
@@ -1401,6 +1401,35 @@ def _sanitize_reply(text: str) -> str:
     return text
 
 
+_SANITIZED_ERROR_MESSAGES = {
+    "connection": "连接失败，请稍后重试",
+    "timeout": "请求超时，请稍后重试",
+    "auth": "认证失败，请检查密钥",
+    "permission": "权限不足",
+    "file": "文件操作失败",
+    "value": "输入数据有误",
+    "type": "数据类型错误",
+    "key": "密钥错误",
+    "index": "数据未找到",
+    "json": "数据格式错误",
+    "runtime": "服务内部错误，请稍后重试",
+    "attribute": "功能暂不可用",
+    "notimplemented": "功能开发中",
+    "overflow": "数值溢出",
+    "recursion": "处理超时",
+}
+
+
+def _safe_error(exc: Exception, fallback: str = "操作失败，请稍后重试") -> str:
+    """Convert exception to safe user-facing message without exposing internals."""
+    exc_type = type(exc).__name__.lower()
+    exc_msg = str(exc).lower()
+    for key, msg in _SANITIZED_ERROR_MESSAGES.items():
+        if key in exc_type or key in exc_msg:
+            return msg
+    return fallback
+
+
 async def send_reply(text: str, emotion: str, send_func):
     brain.state = "speaking"
     text = _sanitize_reply(text)
@@ -1487,7 +1516,7 @@ async def handle_add_platform(payload: dict, send_func):
         await send_func("platform_added", {"platform_id": pid, "name": cfg.name})
         await send_reply(f"已添加 {cfg.name}！接下来帮你登录~ 🥔", "happy", send_func)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_list_platforms(send_func):
@@ -1499,7 +1528,7 @@ async def handle_list_platforms(send_func):
         builtin = registry.list_all_builtin()
         await send_func("platforms_list", {"active": active, "available": builtin})
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_get_prefs(send_func):
@@ -1507,7 +1536,7 @@ async def handle_get_prefs(send_func):
         from potato.user_prefs import UserPrefs
         await send_func("user_prefs", UserPrefs().get_all())
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_update_prefs(payload: dict, send_func):
@@ -1516,7 +1545,7 @@ async def handle_update_prefs(payload: dict, send_func):
         updated = UserPrefs().update(payload)
         await send_func("user_prefs", updated)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_update_risk(payload: dict, send_func):
@@ -1588,7 +1617,7 @@ async def handle_update_risk(payload: dict, send_func):
         )
         await send_func("risk_updated", {"updates": applied, "all_prefs": all_prefs, "summary": summary})
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_login_platform(payload: dict, send_func):
@@ -1624,7 +1653,7 @@ async def handle_detect_apps(send_func):
         else:
             await send_reply("没有检测到股票APP，我可以用浏览器帮你操作~ 告诉我你用什么平台？", "neutral", send_func)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_launch_app(payload: dict, send_func):
@@ -1647,7 +1676,7 @@ async def handle_launch_app(payload: dict, send_func):
         elif result.get("mode") == "browser_fallback":
             await send_reply("没找到桌面APP，帮你用浏览器打开~", "neutral", send_func)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_cleanup_memory(send_func):
@@ -1660,7 +1689,7 @@ async def handle_cleanup_memory(send_func):
         else:
             await send_reply("记忆都很新鲜，不需要清理~", "neutral", send_func)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 _CLEANUP_SAFE_DIRS = {
@@ -1775,7 +1804,7 @@ async def handle_cleanup_pc(payload: dict, send_func):
                              f"{label}: 清理{file_count}个文件, 释放{freed_mb}MB")
 
         except Exception as e:
-            details.append(f"{label}: 跳过({str(e)[:40]})")
+            details.append(f"{label}: 跳过({_safe_error(e)})")
 
     if level in ("deep", "full"):
         try:
@@ -1848,7 +1877,7 @@ async def handle_get_memory(payload: dict, send_func):
                 "categories": list(brain.memory.facts.keys()) if hasattr(brain.memory, 'facts') else [],
             })
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def _refresh_config_for_key(key_upper: str, value: str):
@@ -1908,7 +1937,7 @@ async def handle_vault_store(payload: dict, send_func):
         else:
             await send_reply(f"{key_desc} 存好了！所有核心密钥齐全，可以开始用了~ 🥔", "happy", send_func)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_vault_list(payload: dict, send_func):
@@ -1917,7 +1946,7 @@ async def handle_vault_list(payload: dict, send_func):
         keys = Vault().list_keys(payload.get("category", ""))
         await send_func("vault_keys", {"keys": keys, "count": len(keys)})
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_vault_delete(payload: dict, send_func):
@@ -1927,7 +1956,7 @@ async def handle_vault_delete(payload: dict, send_func):
         await send_func("vault_deleted", {"key": payload.get("key", "")})
         await send_reply(f"密钥已从保险箱删除~ 🥔", "neutral", send_func)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_vault_status(send_func):
@@ -1944,7 +1973,7 @@ async def handle_vault_status(send_func):
         else:
             await send_reply(f"保险箱有 {total} 个密钥，核心密钥齐全！🥔", "happy", send_func)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_open_renewal_url(payload: dict, send_func):
@@ -1967,7 +1996,7 @@ async def handle_open_renewal_url(payload: dict, send_func):
         await send_func("renewal_opened", {"key": key_name, "url": renewal_url})
         await send_reply(f"已帮你打开 {desc} 的续费页面！按提示充值就行~ 🥔", "happy", send_func)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_credential_grant(payload: dict, send_func):
@@ -1988,7 +2017,7 @@ async def handle_credential_grant(payload: dict, send_func):
             "happy", send_func,
         )
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_credential_revoke(payload: dict, send_func):
@@ -2008,7 +2037,7 @@ async def handle_credential_revoke(payload: dict, send_func):
             "neutral", send_func,
         )
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_credential_status(send_func):
@@ -2031,7 +2060,7 @@ async def handle_credential_status(send_func):
                 msg += f"  需要登录: {', '.join(assisted)}"
             await send_reply(msg, "happy", send_func)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_credential_schemas(send_func):
@@ -2041,7 +2070,7 @@ async def handle_credential_schemas(send_func):
         schemas = CredentialsPlugin.all_field_schemas()
         await send_func("credential_schemas", {"platforms": schemas})
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 _voice_call_session = None
@@ -2340,7 +2369,7 @@ async def handle_bytebot_cancel(payload: dict, send_func):
         else:
             await send_reply(f"取消任务失败（可能已完成或不存在）🥔", "neutral", send_func)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_bytebot_message(payload: dict, send_func):
@@ -2358,7 +2387,7 @@ async def handle_bytebot_message(payload: dict, send_func):
         else:
             await send_reply("发送失败，任务可能已结束~", "neutral", send_func)
     except Exception as e:
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
 
 
 async def handle_trade_analysis(payload: dict, send_func):
@@ -2410,7 +2439,7 @@ async def handle_trade_analysis(payload: dict, send_func):
             await send_func("error", {"info": f"分析失败: {result.get('error', '')}"})
     except Exception as e:
         logger.warning("Trade analysis error: %s", e)
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
     finally:
         brain.state = "idle"
         await send_func("state_update", {"state": "idle"})
@@ -2446,7 +2475,7 @@ async def handle_trade_execute(payload: dict, send_func):
             await send_reply(f"交易被拦截: {result.get('reason', '')} 🥔", "neutral", send_func)
     except Exception as e:
         logger.warning("Trade execute error: %s", e)
-        await send_func("error", {"info": str(e)})
+        await send_func("error", {"info": _safe_error(e)})
     finally:
         brain.state = "idle"
         await send_func("state_update", {"state": "idle"})

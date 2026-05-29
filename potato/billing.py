@@ -147,6 +147,7 @@ class BillingManager:
 
     def _init_db(self):
         with sqlite3.connect(str(DB_PATH)) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS usage (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -187,6 +188,9 @@ class BillingManager:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_prov ON usage(provider)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_ts ON wallet(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_renewals_prov ON renewals(provider)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_renewals_ts ON renewals(timestamp)")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS wallet_config (
                     key TEXT PRIMARY KEY,
@@ -342,8 +346,12 @@ class BillingManager:
         }
 
     def add_wallet_topup(self, amount_cny: float, method: str = "manual", description: str = "", tx_hash: str = "") -> dict[str, Any]:
+        amount_cny = float(amount_cny)
+        if amount_cny <= 0 or amount_cny > 100000:
+            return {"ok": False, "error": "金额必须在 0.01 ~ 100,000 之间", "amount_cny": amount_cny}
         now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(str(DB_PATH)) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 "INSERT INTO wallet (timestamp, amount_cny, payment_method, description, tx_hash) VALUES (?, ?, ?, ?, ?)",
                 (now, amount_cny, method, description, tx_hash),
@@ -352,11 +360,24 @@ class BillingManager:
 
     def get_billing_dashboard(self) -> dict[str, Any]:
         """User-facing dashboard — shows ONLY total prices, never margin breakdown."""
-        providers = [p.__dict__ for p in self.get_provider_statuses()]
+        providers_raw = [p.__dict__ for p in self.get_provider_statuses()]
         wallet = self.get_wallet_balance()
         usage = self.get_usage_summary(days=30)
-        configured = [p for p in providers if p["key_configured"]]
-        needs_payment = [p for p in providers if not p["key_active"]]
+        configured = [p for p in providers_raw if p["key_configured"]]
+        needs_payment = [p for p in providers_raw if not p["key_active"]]
+
+        safe_providers = []
+        for p in providers_raw:
+            safe_providers.append({
+                "name": p["name"],
+                "provider": p["provider"],
+                "key_configured": p["key_configured"],
+                "key_active": p["key_active"],
+                "total_cost_cny": p.get("total_cost_cny", 0),
+                "cost_with_margin": p.get("cost_with_margin", 0),
+                "renewal_url": p.get("renewal_url", ""),
+                "dashboard_url": p.get("dashboard_url", ""),
+            })
 
         lines = ["💳 小土豆服务总览\n"]
         if configured:
@@ -375,7 +396,7 @@ class BillingManager:
             lines.append(f"\n💡 说\"续费\"或点🔄续费按钮即可续费")
 
         return {
-            "providers": providers,
+            "providers": safe_providers,
             "wallet": wallet,
             "usage_30d": usage,
             "configured_count": len(configured),
@@ -453,9 +474,23 @@ class BillingManager:
         }
 
     def _auto_deduct_renewal(self, items: list[dict], current_balance: float) -> None:
-        """Auto-deduct renewal cost from wallet when balance is sufficient."""
+        """Auto-deduct renewal cost from wallet when balance is sufficient.
+
+        Uses a single connection with explicit transaction for atomicity.
+        """
+        total_cny = round(sum(item["price_cny"] for item in items), 2)
         now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(str(DB_PATH)) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("BEGIN IMMEDIATE")
+            balance_row = conn.execute(
+                "SELECT COALESCE(SUM(amount_cny), 0) FROM wallet"
+            ).fetchone()
+            balance = balance_row[0] if balance_row else 0.0
+            if balance < total_cny:
+                conn.execute("ROLLBACK")
+                logger.warning("Auto-renewal skipped: balance %.2f < total %.2f", balance, total_cny)
+                return
             for item in items:
                 conn.execute(
                     "INSERT INTO wallet (timestamp, amount_cny, payment_method, description, tx_hash) VALUES (?, ?, ?, ?, ?)",
@@ -465,6 +500,7 @@ class BillingManager:
                     "INSERT INTO renewals (timestamp, provider, amount_usd, amount_cny, margin_cny, total_cny, status, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (now, item["provider"], 0.0, item["price_cny"] / 2, item["price_cny"] / 2, item["price_cny"], "auto_deducted", ""),
                 )
+            conn.execute("COMMIT")
         logger.info("Auto-renewal deducted for %s providers", len(items))
 
     def generate_payment_qr(self, amount_cny: float = 0.0) -> str:
