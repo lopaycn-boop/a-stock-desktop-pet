@@ -101,6 +101,25 @@ def _check_rate_limit(ip: str) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from potato.version import __version__, __author__, BUILD, FEATURES
+    banner_lines = [
+        "",
+        "╔══════════════════════════════════════════════╗",
+        "║     🥔 小土豆 AI操盘桌宠  v{}              ║".format(__version__),
+        "║     Author: {}                          ║".format(__author__),
+        "║     Build: {}                           ║".format(BUILD),
+        "╠══════════════════════════════════════════════╣",
+        "║  后端 :8000  │  前端 :5173  │  Agent :9991 ║",
+        "╠══════════════════════════════════════════════╣",
+        "║  数据源: DeepSeek│东方财富│问财选股│新浪财经  ║",
+        "║  引 擎: 5层LLM│PlanExecute│6Agent│DemoMode ║",
+        "║  安  全: 15条风控│密钥加密│浏览器白名单│AI门控║",
+        "╚══════════════════════════════════════════════╝",
+        "",
+    ]
+    for line in banner_lines:
+        logger.info(line)
+
     logger.info("Pet backend starting (pid=%s)", os.getpid())
     db_result = await asyncio.to_thread(init_db)
     logger.info("Database init result: %s", db_result)
@@ -571,10 +590,40 @@ brain = PotatoPetBrain()
 def health():
     uptime = time.time() - _startup_time
     db_status = health_check()
+
+    from potato.vault import Vault
+    vault = Vault()
+    vault_keys = {}
+    for key_name in ["DEEPSEEK_API_KEY", "SILICON_API_KEY", "LINER_API_KEY", "OPENAI_API_KEY", "BASE44_API_KEY", "EM_API_KEY", "IWENCAI_API_KEY"]:
+        val = vault.get(key_name)
+        if val:
+            vault_keys[key_name] = "active"
+        else:
+            vault_keys[key_name] = "empty"
+
+    active_providers = sum(1 for v in vault_keys.values() if v == "active")
+
     return JSONResponse({
         "status": "ok" if db_status.get("ok") else "degraded",
         "uptime_seconds": round(uptime, 1),
         "database": db_status,
+        "data_sources": {
+            "llm_providers": vault_keys,
+            "active_providers": active_providers,
+            "demo_mode": active_providers == 0,
+        },
+        "trading_mode": os.environ.get("TRADING_MODE", "dry_run"),
+    })
+
+
+@app.get("/version")
+def version():
+    from potato.version import __version__, __author__, BUILD, FEATURES
+    return JSONResponse({
+        "version": __version__,
+        "author": __author__,
+        "build": BUILD,
+        "features": FEATURES,
     })
 
 
