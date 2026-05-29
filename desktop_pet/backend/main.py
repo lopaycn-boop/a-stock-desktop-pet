@@ -668,13 +668,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 continue
             brain.last_interaction = time.time()
 
-            msg_type = packet.get("type", "")
-            payload = packet.get("payload", {})
-            if not isinstance(payload, dict):
-                payload = {}
-
             _SOURCE_CODE_BLOCK_PATTERNS = [
-                r"(?i)(show|give|send|reveal|display|print|dump|export|fetch|read|open)\s+(me|the|your|all)?\s*(source|code|源码|源代码|代码|source\s*code)",
+                r"(?i)(show|give|send|reveal|display|print|dump|export|fetch|read|open|see|list)\s+(me|the|your|all)?\s*(source|code|源码|源代码|代码|source\s*code)",
                 r"(?i)(how\s+(is|does|do)\s+(this|it|the|your)\s+(app|program|system|project|tool|bot|pet)\s+(built|made|work|implemented|coded|written))",
                 r"(?i)(database\s+schema|数据库结构|internal\s+architecture|内部架构|pricing\s+model|分账|利润|margin\s+split|费率\s*结构)",
                 r"(?i)(\.py|\.js|\.json|\.html|\.css|\.sql|\.toml|\.yaml|\.env)\s*(file|content|content)",
@@ -683,12 +678,14 @@ async def websocket_endpoint(websocket: WebSocket):
             ]
             _input_text = str(payload.get("text", "")) if isinstance(payload, dict) else ""
             import re as _re
+            _blocked = False
             for _pat in _SOURCE_CODE_BLOCK_PATTERNS:
                 if _re.search(_pat, _input_text):
                     await send_to_frontend("error", {"info": "这是小土豆的内部秘密哦~ 不能告诉你这些~"})
+                    _blocked = True
                     break
 
-            if msg_type == "text_input":
+            if msg_type == "text_input" and not _blocked:
                 await handle_user_input(payload.get("text", ""), send_to_frontend)
 
             elif msg_type == "audio_input":
@@ -1006,6 +1003,11 @@ async def handle_visual_task(payload: dict, send_func):
 
 
 async def handle_user_input(text: str, send_func):
+    if len(text) > 10000:
+        await send_func("error", {"info": "消息过长，请控制在10000字以内"})
+        brain.state = "idle"
+        await send_func("state_update", {"state": "idle"})
+        return
     brain.state = "thinking"
     await send_func("state_update", {"state": "thinking"})
     brain.reset_boredom_time()
@@ -2178,6 +2180,9 @@ async def handle_vault_store(payload: dict, send_func):
             await send_func("error", {"info": "需要 key 和 value"})
             return
         key_upper = key.strip().upper()
+        if any(c in key_upper for c in (';', '|', '`', '\n', '\r', '/', '\\', '..')):
+            await send_func("error", {"info": "密钥名含非法字符"})
+            return
         is_url = value.strip().startswith("http")
         from potato.vault import KNOWN_KEYS as _KNS
         key_desc = _KNS.get(key_upper, {}).get("desc", key_upper)
@@ -2387,13 +2392,18 @@ async def handle_voice_call_audio(payload: dict, send_func):
 
 async def handle_voice_call_end(send_func):
     global _voice_call_session
-    if _voice_call_session:
-        result = await _voice_call_session.end()
+    try:
+        if _voice_call_session:
+            result = await _voice_call_session.end()
+            _voice_call_session = None
+            await send_func("voice_call_ended", result)
+            await send_reply("语音通话结束了~", "neutral", send_func)
+        else:
+            await send_func("voice_call_ended", {"ok": True, "turns": 0})
+    except Exception as e:
+        logger.warning("voice_call_end error: %s", e)
         _voice_call_session = None
-        await send_func("voice_call_ended", result)
-        await send_reply("语音通话结束了~", "neutral", send_func)
-    else:
-        await send_func("voice_call_ended", {"ok": True, "turns": 0})
+        await send_func("error", {"info": f"语音通话结束失败: {_safe_error(e)}"})
 
 
 async def handle_set_voice(payload: dict, send_func):
@@ -2411,6 +2421,9 @@ async def handle_set_voice(payload: dict, send_func):
             await send_func("error", {"info": f"Unknown voice: {profile_id}", "available": available})
     except ImportError:
         await send_func("error", {"info": "语音模块未安装，无法切换声音"})
+    except Exception as e:
+        logger.warning("set_voice error: %s", e)
+        await send_func("error", {"info": f"切换声音失败: {_safe_error(e)}"})
 
 
 async def handle_list_voices(send_func):
@@ -2419,6 +2432,9 @@ async def handle_list_voices(send_func):
         voices = {k: {"name": v["name"], "description": v["description"]} for k, v in VOICE_PROFILES.items()}
         await send_func("voice_list", {"voices": voices, "current": _current_voice_profile})
     except ImportError:
+        await send_func("voice_list", {"voices": {}, "current": _current_voice_profile})
+    except Exception as e:
+        logger.warning("list_voices error: %s", e)
         await send_func("voice_list", {"voices": {}, "current": _current_voice_profile})
 
 
@@ -2745,30 +2761,42 @@ async def handle_trade_execute(payload: dict, send_func):
 
 async def handle_trade_auto_start(payload: dict, send_func):
     global _trading_scheduler
-    if _trading_scheduler and _trading_scheduler._running:
-        _trading_scheduler.send_func = send_func
+    try:
+        if _trading_scheduler and _trading_scheduler._running:
+            _trading_scheduler.send_func = send_func
+            await send_func("trade_auto_status", {"running": True, "status": _trading_scheduler.get_status()})
+            return
+        _trading_scheduler = TradingScheduler(send_func, broker=_get_broker())
+        _trading_scheduler.start()
         await send_func("trade_auto_status", {"running": True, "status": _trading_scheduler.get_status()})
-        return
-    _trading_scheduler = TradingScheduler(send_func, broker=_get_broker())
-    _trading_scheduler.start()
-    await send_func("trade_auto_status", {"running": True, "status": _trading_scheduler.get_status()})
-    await send_reply("自动操盘已启动！我会按盘前→开盘→午间→尾盘→盘后流程自动运转 🥔📈", "happy", send_func)
+        await send_reply("自动操盘已启动！我会按盘前→开盘→午间→尾盘→盘后流程自动运转 🥔📈", "happy", send_func)
+    except Exception as e:
+        logger.warning("trade_auto_start error: %s", e)
+        await send_func("error", {"info": f"启动自动操盘失败: {_safe_error(e)}"})
 
 
 async def handle_trade_auto_stop(send_func):
     global _trading_scheduler
-    if _trading_scheduler:
-        _trading_scheduler.stop()
-    await send_func("trade_auto_status", {"running": False})
-    await send_reply("自动操盘已停止 🥔", "neutral", send_func)
+    try:
+        if _trading_scheduler:
+            _trading_scheduler.stop()
+        await send_func("trade_auto_status", {"running": False})
+        await send_reply("自动操盘已停止 🥔", "neutral", send_func)
+    except Exception as e:
+        logger.warning("trade_auto_stop error: %s", e)
+        await send_func("error", {"info": f"停止操盘失败: {_safe_error(e)}"})
 
 
 async def handle_trade_status(send_func):
     global _trading_scheduler
-    if _trading_scheduler:
-        await send_func("trade_auto_status", _trading_scheduler.get_status())
-    else:
-        await send_func("trade_auto_status", {"running": False, "trades_today": 0, "total_trades": 0})
+    try:
+        if _trading_scheduler:
+            await send_func("trade_auto_status", _trading_scheduler.get_status())
+        else:
+            await send_func("trade_auto_status", {"running": False, "trades_today": 0, "total_trades": 0})
+    except Exception as e:
+        logger.warning("trade_status error: %s", e)
+        await send_func("trade_auto_status", {"running": False, "error": _safe_error(e)})
 
 
 _journal = TradeJournal()
@@ -3016,6 +3044,9 @@ async def handle_billing_topup(payload: dict, send_func):
 
         if amount <= 0:
             await send_func("error", {"info": "充值金额必须大于0"})
+            return
+        if amount > 100000:
+            await send_func("error", {"info": "单次充值金额不能超过10万元"})
             return
 
         result = _billing.add_wallet_topup(
@@ -3437,7 +3468,7 @@ async def handle_realtime_quote(payload: dict, send_func):
 
 
 async def handle_em_query(payload: dict, send_func):
-    question = payload.get("question", "")
+    question = str(payload.get("question", ""))[:1000]
     if not question:
         await send_func("error", {"info": "请输入问题"})
         return
@@ -3547,7 +3578,7 @@ async def handle_chip_distribution_ai(payload: dict, send_func):
 
 
 async def handle_iwencai_query(payload: dict, send_func):
-    query = payload.get("query", "")
+    query = str(payload.get("query", ""))[:1000]
     if not query:
         await send_func("error", {"info": "请输入查询内容"})
         return

@@ -634,8 +634,9 @@ case 'billing_renewal_payment': {
         break;
       }
       case 'trade_screenshot': {
-        if (payload?.image) {
-          setMessages(prev => [...prev, { type: 'system', content: '📊 交易截图', image: payload.image }]);
+        const imgData = payload?.image || '';
+        if (imgData && (imgData.startsWith('data:image/') || imgData.startsWith('/9j/'))) {
+          setMessages(prev => [...prev, { type: 'system', content: '📊 交易截图', image: imgData }]);
         }
         break;
       }
@@ -1039,8 +1040,8 @@ case 'billing_renewal_payment': {
                   </div>
                 </>
               ) : msg.content}
-              {msg.image && (
-                <img src={msg.image} alt="screenshot" className="chat-screenshot" onClick={() => window.open(msg.image, '_blank')} />
+              {msg.image && (msg.image.startsWith('data:image/') || msg.image.startsWith('/9j/')) && (
+                <img src={msg.image} alt="screenshot" className="chat-screenshot" />
               )}
               {msg.actions && msg.actions.length > 0 && (
                 <div className="msg-actions" style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
