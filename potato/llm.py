@@ -116,31 +116,63 @@ def _model_id(settings: Settings) -> str:
     return raw or "deepseek-chat"
 
 
+_KEY_FORMATS = {
+    "DEEPSEEK_API_KEY": {"prefix": "sk-", "min_len": 32},
+    "SILICON_API_KEY": {"prefix": "sk-", "min_len": 32},
+    "OPENAI_API_KEY": {"prefix": "sk-", "min_len": 40},
+    "LINER_API_KEY": {"min_len": 16},
+    "BASE44_API_KEY": {"min_len": 16},
+}
+
+_KEY_ALIASES = {
+    "SILICON_API_KEY": ["SILICONFLOW_API_KEY", "SILICON_KEY"],
+    "DEEPSEEK_API_KEY": ["DEEPSEEK_KEY"],
+    "OPENAI_API_KEY": ["OPENAI_KEY"],
+    "LINER_API_KEY": ["LINER_KEY"],
+    "BASE44_API_KEY": ["BASE44_KEY"],
+}
+
+
+def _validate_key(key_env: str, key: str) -> str:
+    fmt = _KEY_FORMATS.get(key_env)
+    if not fmt or not key:
+        return key
+    prefix = fmt.get("prefix")
+    if prefix and not key.startswith(prefix):
+        logger.warning(
+            "%s likely invalid: expected prefix '%s' but got '%s...'",
+            key_env, prefix, key[:6],
+        )
+    if len(key) < fmt["min_len"]:
+        logger.warning(
+            "%s likely invalid: length %d < minimum %d",
+            key_env, len(key), fmt["min_len"],
+        )
+    return key
+
+
 def _get_key(settings: Settings, key_env: str) -> str:
+    import os
     key = ""
     if key_env == "DEEPSEEK_API_KEY":
         key = settings.deepseek_api_key or ""
-    elif key_env == "SILICON_API_KEY":
-        import os
-        key = os.environ.get("SILICON_API_KEY", "") or os.environ.get("SILICON_KEY", "")
-    elif key_env == "LINER_API_KEY":
-        import os
-        key = os.environ.get("LINER_API_KEY", "")
-    elif key_env == "OPENAI_API_KEY":
-        import os
-        key = os.environ.get("OPENAI_API_KEY", "")
-    elif key_env == "BASE44_API_KEY":
-        import os
-        key = os.environ.get("BASE44_API_KEY", "")
+    if not key:
+        aliases = [key_env] + _KEY_ALIASES.get(key_env, [])
+        for name in aliases:
+            key = os.environ.get(name, "")
+            if key:
+                break
     if not key:
         try:
             from potato.vault import Vault
-            key = Vault().get(key_env) or ""
+            vault = Vault()
+            for name in aliases:
+                key = vault.get(name) or ""
+                if key:
+                    break
         except Exception:
             pass
-    if not key:
-        import os
-        key = os.environ.get(key_env, "")
+    _validate_key(key_env, key)
     return key.strip()
 
 

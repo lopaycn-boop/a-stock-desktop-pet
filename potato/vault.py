@@ -38,8 +38,10 @@ VAULT_CATEGORIES = {
 KNOWN_KEYS = {
     "DEEPSEEK_API_KEY": {"category": "api_key", "desc": "DeepSeek 大模型 API Key", "required": True,
                           "renewal_url": "https://platform.deepseek.com/usage", "dashboard_url": "https://platform.deepseek.com/api_keys"},
-    "SILICON_API_KEY": {"category": "api_key", "desc": "SiliconFlow TTS/STT API Key",
+    "SILICON_API_KEY": {"category": "api_key", "desc": "SiliconFlow LLM API Key (sk-... 格式)",
                          "renewal_url": "https://cloud.siliconflow.cn/account/usage", "dashboard_url": "https://cloud.siliconflow.cn/account/token"},
+    "SILICONFLOW_API_KEY": {"category": "api_key", "desc": "SiliconFlow LLM API Key (别名，等同SILICON_API_KEY)",
+                             "renewal_url": "https://cloud.siliconflow.cn/account/usage", "dashboard_url": "https://cloud.siliconflow.cn/account/token"},
     "LINER_API_KEY": {"category": "api_key", "desc": "Liner AI API Key (4层故障转移)",
                       "renewal_url": "https://platform.liner.com/keys", "dashboard_url": "https://platform.liner.com/keys"},
     "OPENAI_API_KEY": {"category": "api_key", "desc": "OpenAI API Key (4层故障转移)",
