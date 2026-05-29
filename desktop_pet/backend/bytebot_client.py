@@ -106,7 +106,7 @@ class BytebotClient:
             return False
 
     async def create_task(self, description: str, files: list = None,
-                          priority: str = "MEDIUM", model: dict = None) -> dict:
+                           priority: str = "MEDIUM", model: dict = None) -> dict:
         """Create a new Bytebot task. Returns the full Task object."""
         self._ensure_urls()
         session = await self._get_session()
@@ -125,17 +125,37 @@ class BytebotClient:
                                filename=f.get("name", "file"),
                                content_type=f.get("type", "application/octet-stream"))
             async with session.post(f"{self.agent_url}/tasks", data=form) as resp:
+                if resp.status >= 400:
+                    text = await resp.text()
+                    logger.error("Bytebot create_task HTTP %d: %s", resp.status, text[:200])
+                    return {"error": f"HTTP {resp.status}", "status": "FAILED"}
                 return await resp.json()
         else:
             async with session.post(f"{self.agent_url}/tasks", json=data) as resp:
-                return await resp.json()
+                if resp.status >= 400:
+                    text = await resp.text()
+                    logger.error("Bytebot create_task HTTP %d: %s", resp.status, text[:200])
+                    return {"error": f"HTTP {resp.status}", "status": "FAILED"}
+                try:
+                    return await resp.json()
+                except Exception:
+                    text = await resp.text()
+                    logger.error("Bytebot create_task non-JSON: %s", text[:200])
+                    return {"error": "non-JSON response", "status": "FAILED"}
 
     async def get_task(self, task_id: str) -> Optional[dict]:
         self._ensure_urls()
         session = await self._get_session()
         async with session.get(f"{self.agent_url}/tasks/{task_id}") as resp:
             if resp.status == 200:
-                return await resp.json()
+                try:
+                    return await resp.json()
+                except Exception:
+                    return None
+            if resp.status == 404:
+                return None
+            text = await resp.text()
+            logger.error("Bytebot get_task HTTP %d: %s", resp.status, text[:200])
             return None
 
     async def get_task_messages(self, task_id: str, limit: int = 50) -> list:
@@ -251,6 +271,7 @@ class BytebotClient:
 
 
 _bytebot_client: Optional[BytebotClient] = None
+_client_lock = asyncio.Lock()
 
 
 def get_bytebot_client() -> BytebotClient:

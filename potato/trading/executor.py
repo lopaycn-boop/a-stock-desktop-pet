@@ -242,15 +242,21 @@ class TradeExecutor:
             result = await bytebot_client.computer_use("application", application="google-chrome")
             if not result.get("ok"):
                 return {"ok": False, "reason": f"无法打开浏览器: {result.get('error')}"}
-            await asyncio.sleep(3)
+            await asyncio.sleep(1)
 
             from potato.browser.platforms import BUILTIN_PLATFORMS
             platform = BUILTIN_PLATFORMS.get(trade.platform_id or "eastmoney")
             if platform:
                 await self._emit_step("navigate", "running", f"导航到 {platform.name}")
-                type_result = await bytebot_client.computer_use("type_text", text=platform.url)
-                await bytebot_client.computer_use("press_keys", keys=["Return"])
-                await asyncio.sleep(3)
+                await bytebot_client.computer_use("type_text", text=platform.url)
+                await bytebot_client.computer_use("type_text", text="\n")
+                await asyncio.sleep(2)
+
+                for _ in range(10):
+                    scr = await bytebot_client.computer_use("screenshot")
+                    await asyncio.sleep(1)
+                    if scr.get("ok"):
+                        break
 
             screenshot = await bytebot_client.computer_use("screenshot")
             if screenshot.get("image"):

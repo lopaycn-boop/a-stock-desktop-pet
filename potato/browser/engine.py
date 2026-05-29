@@ -46,7 +46,17 @@ class BrowserEngine:
 
     @classmethod
     def available(cls) -> bool:
-        return _PLAYWRIGHT_AVAILABLE
+        if not _PLAYWRIGHT_AVAILABLE:
+            return False
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["python", "-m", "playwright", "install", "--dry-run", "chromium"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return result.returncode == 0
+        except Exception:
+            return _PLAYWRIGHT_AVAILABLE
 
     async def start(self, headless: bool = True) -> None:
         if not _PLAYWRIGHT_AVAILABLE:

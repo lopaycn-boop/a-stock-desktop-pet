@@ -247,13 +247,137 @@ class TradingScheduler:
 
     async def _phase_pre_market(self):
         await self._emit_step("pre_market", "running", "盘前扫描中...")
-        await self._emit_step("pre_market", "done", "盘前扫描完成")
+        try:
+            from potato.user_prefs import UserPrefs
+            from potato.intel import fetch_headlines
+            prefs = UserPrefs()
+            all_prefs = prefs.get_all()
+        except Exception:
+            all_prefs = {}
+        symbols = all_prefs.get("watchlist") or all_prefs.get("watchlist_symbols") or []
+        if isinstance(symbols, str):
+            symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+        if not symbols:
+            symbols = ["600519", "000858", "601318"]
+
+        news_items = None
+        try:
+            news_items = fetch_headlines(limit_per_feed=4)
+            await self._emit_step("pre_market", "running", f"获取到{len(news_items)}条资讯，分析{len(symbols)}只自选股...")
+        except Exception as e:
+            logger.warning("Pre-market news fetch failed: %s", e)
+
+        result = await self.run_manual_analysis(
+            symbols=symbols,
+            user_prefs=all_prefs,
+            news_items=news_items,
+        )
+
+        analysis = result.get("analysis", {}) if result.get("ok") else {}
+        picks = analysis.get("stock_picks", [])
+        summary = f"盘前扫描完成：{len(symbols)}只自选股，{len(news_items or [])}条资讯"
+        if picks:
+            buy_signals = [p for p in picks if p.get("action") == "BUY" and p.get("confidence", 0) >= 0.65]
+            summary += f"，{len(buy_signals)}只买入信号"
+
+        await self.send_func("chat", {
+            "text": f"🌅 盘前扫描完成\n分析了{len(symbols)}只自选股 + {len(news_items or [])}条资讯\n"
+                    + (f"发现{len([p for p in picks if p.get('action') in ('BUY','SELL')])}个操作信号" if picks else "暂无明确信号"),
+            "expression": "happy" if picks else "neutral",
+        })
+        await self._emit_step("pre_market", "done", summary)
 
     async def _phase_open_analysis(self):
         await self._emit_step("open_analysis", "running", "开盘分析中...")
 
+        try:
+            from potato.user_prefs import UserPrefs
+            from potato.intel import fetch_headlines
+            prefs = UserPrefs()
+            all_prefs = prefs.get_all()
+        except Exception:
+            all_prefs = {}
+
+        symbols = all_prefs.get("watchlist") or all_prefs.get("watchlist_symbols") or []
+        if isinstance(symbols, str):
+            symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+        if not symbols:
+            symbols = ["600519", "000858", "601318"]
+
+        await self._emit_step("open_analysis", "running", f"抓取资讯中...")
+
+        news_items = []
+        try:
+            news_items = fetch_headlines(limit_per_feed=6)
+            news_count = len(news_items)
+            await self._emit_step("open_analysis", "running", f"获取到{news_count}条资讯，开始分析{len(symbols)}只股票...")
+        except Exception as e:
+            logger.warning("News fetch failed: %s", e)
+
+        result = await self.run_manual_analysis(
+            symbols=symbols[:5],
+            user_prefs=all_prefs,
+            news_items=news_items if news_items else None,
+        )
+
+        analysis = result.get("analysis", {}) if result.get("ok") else {}
+        picks = analysis.get("stock_picks", [])
+
+        if result.get("ok") and picks:
+            formatted = format_trade_decision_for_pet(result)
+            await self.send_func("chat", {
+                "text": f"📊 开盘分析完成\n\n{formatted}",
+                "expression": "happy",
+            })
+
+            for pick in picks:
+                action = pick.get("action", "WATCH")
+                if action in ("BUY", "SELL"):
+                    signal_msg = format_trade_signal_message(pick)
+                    if signal_msg:
+                        await self._emit("trade_signal", {
+                            "symbol": pick.get("symbol", ""),
+                            "name": pick.get("name", ""),
+                            "action": action,
+                            "confidence": pick.get("confidence", 0),
+                            "message": signal_msg,
+                        })
+
+            await self._emit_step("open_analysis", "done", f"分析完成: {len(picks)}只选股, {len([p for p in picks if p.get('action') in ('BUY','SELL')])}只操作信号")
+
+            risk_confirmed = bool(all_prefs.get("risk_confirmed", False))
+            has_capital = bool(all_prefs.get("max_single_cny") or all_prefs.get("max_daily_cny"))
+
+            if risk_confirmed and has_capital:
+                for pick in picks:
+                    if pick.get("action") in ("BUY", "SELL") and pick.get("confidence", 0) >= 0.65:
+                        trade_result = await self.execute_trade_decision(pick, user_prefs=all_prefs)
+                        await self.send_func("trade_result", {
+                            "ok": trade_result.get("ok", False),
+                            "action": trade_result.get("action", pick.get("action")),
+                            "symbol": trade_result.get("symbol", pick.get("symbol")),
+                            "name": trade_result.get("name", pick.get("name")),
+                            "amount_cny": str(trade_result.get("amount_cny", "")),
+                            "reason": trade_result.get("reason", ""),
+                        })
+        else:
+            error_msg = result.get("error", "分析未返回结果") if not result.get("ok") else "无选股信号"
+            await self.send_func("chat", {
+                "text": f"📊 开盘分析: {error_msg}",
+                "expression": "neutral",
+            })
+            await self._emit_step("open_analysis", "done", f"分析完成: {error_msg}")
+
+        self._last_analysis = result
+
     async def _phase_risk_confirm(self):
-        """STRICT: Ask user for today's limits. 10 min timeout → use yesterday's."""
+        """Auto-confirm with defaults, only ask user if capital amount is unset.
+        
+        AI自主操盘原则：只问资金金额，其他全部AI自动决定。
+        - 如果用户已经设定过金额 → 自动沿用，不需确认
+        - 如果从未设过 → 问用户"你要投入多少？"
+        - 止损5%/止盈10%/最多3只持仓 → AI自动设，不用问
+        """
         await self._emit_step("risk_confirm", "running", "确认今日风控参数...")
 
         try:
@@ -263,72 +387,103 @@ class TradingScheduler:
         except Exception:
             all_prefs = {}
 
-        risk_confirmed = bool(all_prefs.get("risk_confirmed", False))
-        if risk_confirmed:
+        # Default values — AI decides these, not user
+        defaults = {
+            "risk_level": "moderate",
+            "max_open_positions": 3,
+            "stop_loss_pct": 0.05,
+            "take_profit_pct": 0.10,
+            "risk_confirmed": True,
+        }
+
+        # Check if user has ever set capital amounts
+        has_capital = bool(all_prefs.get("max_single_cny") or all_prefs.get("max_single_trade_cny") or all_prefs.get("max_daily_cny") or all_prefs.get("max_daily_trade_cny"))
+
+        # Apply user's capital settings or defaults
+        for key, default_val in defaults.items():
+            if key not in all_prefs or all_prefs[key] is None:
+                all_prefs[key] = default_val
+
+        if has_capital:
             single = all_prefs.get("max_single_trade_cny") or all_prefs.get("max_single_cny")
             daily = all_prefs.get("max_daily_trade_cny") or all_prefs.get("max_daily_cny")
-            positions = all_prefs.get("max_open_positions")
-            sl = all_prefs.get("stop_loss_pct")
-            tp = all_prefs.get("take_profit_pct")
-            rl = all_prefs.get("risk_level", "")
 
-            rl_cn = {"conservative": "保守", "moderate": "稳健", "aggressive": "激进"}.get(rl, rl or "未设置")
-            lines = [f"✅ 昨日风控已确认，沿用: 风险等级{rl_cn}"]
-            if single: lines.append(f"  单笔限额: ¥{single}")
-            if daily: lines.append(f"  日限额: ¥{daily}")
-            if positions: lines.append(f"  最多持仓: {positions}只")
-            if sl: lines.append(f"  止损: {float(sl)*100:.0f}%")
-            if tp: lines.append(f"  止盈: {float(tp)*100:.0f}%")
+            rl = all_prefs.get("risk_level", "moderate")
+            rl_cn = {"conservative": "保守", "moderate": "稳健", "aggressive": "激进"}.get(rl, rl)
+
+            summary_lines = [f"✅ 今日操盘参数已自动确认（{rl_cn}模式）"]
+            if single:
+                summary_lines.append(f"  单笔限额: ¥{single}")
+            if daily:
+                summary_lines.append(f"  日限额: ¥{daily}")
+            summary_lines.append(f"  最多持仓: {all_prefs.get('max_open_positions', 3)}只")
+            summary_lines.append(f"  止损: {float(all_prefs.get('stop_loss_pct', 0.05))*100:.0f}%")
+            summary_lines.append(f"  止盈: {float(all_prefs.get('take_profit_pct', 0.10))*100:.0f}%")
 
             await self._emit("risk_confirm_prompt", {
                 "confirmed": True,
-                "source": "yesterday",
+                "source": "auto",
                 "params": all_prefs,
-                "summary": "\n".join(lines),
-                "message": "沿用昨日风控参数（10分钟内无新确认自动沿用）。如需调整请告诉我。",
+                "summary": "\n".join(summary_lines),
+                "message": "操盘参数已自动设置。如需调整金额，直接告诉我就行。",
             })
-            await self._emit_step("risk_confirm", "done", "沿用昨日风控参数")
+            await self._emit_step("risk_confirm", "done", "参数自动确认，开始操盘")
             return
 
+        # First time — ask user for capital amount
         await self._emit("risk_confirm_prompt", {
             "confirmed": False,
-            "source": "new",
-            "params": {},
-            "summary": "⚠️ 风控参数未确认！请告诉我：1) 单笔最多投多少？2) 每天最多投多少？3) 最多同时持几只股？4) 止损比例设多少？",
-            "message": "开启新一天——请确认今日风控参数。10分钟无回复将沿用昨日设置。",
+            "source": "first_time",
+            "params": defaults,
+            "summary": "🔐 首次操盘——只需告诉我一件事：你准备投入多少钱？\n\n其他参数AI自动设置：\n  💹 稳健模式\n  📊 最多同时3只股票\n  🛑 止损5% / 止盈10%\n\n直接回复金额即可，如：\n  「单笔最多1万，每天最多3万」\n  「投入5千」\n  「全部激进模式」",
+            "message": "首次操盘请确认资金金额。止损止盈等参数AI自动设置。",
         })
-        await self._emit_step("risk_confirm", "waiting", "等待用户确认风控参数（10分钟超时→沿用昨日）")
+        await self._emit_step("risk_confirm", "waiting", "等待用户确认资金金额")
 
     async def _phase_mid_review(self):
         await self._emit_step("mid_review", "running", "午间复盘中...")
+
         positions = self.journal.get_open_positions_summary()
         if not positions:
+            await self.send_func("chat", {
+                "text": "📊 午间复盘：当前无持仓，继续观望",
+                "expression": "neutral",
+            })
             await self._emit_step("mid_review", "done", "午间复盘：无持仓")
             return
 
         alerts = await self.journal.check_stops_targets()
-        if alerts:
-            for a in alerts:
-                trigger_cn = "🎯 止盈触发" if a["trigger"] == "take_profit" else "🛑 止损触发"
-                await self._emit("trade_alert", {
-                    "type": a["trigger"],
-                    "symbol": a["symbol"],
-                    "name": a["name"],
-                    "message": f"{trigger_cn}: {a['name']}({a['symbol']}) 当前¥{a['current_price']} "
-                               f"{'→止损价' if a['trigger'] == 'stop_loss' else '→目标价'} "
-                               f"盈亏¥{a['unrealized_pnl']}({a['unrealized_pnl_pct']}%)",
-                    "trade_id": a["trade_id"],
-                })
 
         pos_lines = []
         for pos in positions:
-            pnl_icon = "🟢" if pos.get("direction") == "BUY" else "🔴"
+            pnl_pct = 0
+            try:
+                entry = float(pos.get("entry_price", 0))
+                current = float(pos.get("current_price", 0) or pos.get("entry_price", 0))
+                if entry > 0:
+                    pnl_pct = (current - entry) / entry * 100
+            except Exception:
+                pass
+            pnl_icon = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
             pos_lines.append(f"{pnl_icon} {pos['name']}({pos['symbol']}) "
-                            f"入场¥{pos['entry_price']} 止损¥{pos['stop_loss_price']} 目标¥{pos['target_price']}")
+                          f"入场¥{pos.get('entry_price','-')} 当前¥{pos.get('current_price','-')} "
+                          f"{'+' if pnl_pct>=0 else ''}{pnl_pct:.1f}% "
+                          f"止损¥{pos.get('stop_loss_price','-')} 目标¥{pos.get('target_price','-')}")
 
-        summary = f"午间复盘：{len(positions)}只持仓\n" + "\n".join(pos_lines)
-        if alerts:
-            summary += f"\n⚠️ {len(alerts)}个触发信号！"
+        alert_lines = []
+        for a in alerts:
+            trigger_cn = "🎯 止盈触发" if a["trigger"] == "take_profit" else "🛑 止损触发"
+            alert_lines.append(f"{trigger_cn}: {a['name']}({a['symbol']}) 当前¥{a['current_price']}")
+
+        summary = f"📊 午间复盘：{len(positions)}只持仓\n" + "\n".join(pos_lines)
+        if alert_lines:
+            summary += f"\n\n⚠️ 触发信号：\n" + "\n".join(alert_lines)
+            summary += "\n\nAI正在自动处理触发信号..."
+
+        await self.send_func("chat", {
+            "text": summary,
+            "expression": "thinking" if alerts else "happy",
+        })
 
         await self._emit("mid_review_result", {
             "positions": len(positions),
@@ -336,12 +491,62 @@ class TradingScheduler:
             "alert_details": alerts,
             "summary": summary,
         })
+
+        try:
+            from potato.user_prefs import UserPrefs
+            prefs = UserPrefs()
+            all_prefs = prefs.get_all()
+        except Exception:
+            all_prefs = {}
+
+        for a in alerts:
+            if a["trigger"] == "stop_loss":
+                trade_result = await self.execute_trade_decision({
+                    "action": "SELL",
+                    "symbol": a.get("symbol", ""),
+                    "name": a.get("name", ""),
+                    "entry_price": str(a.get("entry_price", "0")),
+                    "current_price": str(a.get("current_price", "0")),
+                    "confidence": 0.95,
+                    "reasoning": f"止损触发：当前价¥{a.get('current_price')}已跌破止损价¥{a.get('stop_loss_price')}",
+                }, user_prefs=all_prefs)
+                await self.send_func("trade_result", {
+                    "ok": trade_result.get("ok", False),
+                    "action": "SELL",
+                    "symbol": a.get("symbol", ""),
+                    "name": a.get("name", ""),
+                    "reason": f"🛑 止损卖出: {trade_result.get('reason', '止损触发')}",
+                    "amount_cny": str(trade_result.get("amount_cny", "")),
+                })
+            elif a["trigger"] == "take_profit":
+                trade_result = await self.execute_trade_decision({
+                    "action": "SELL",
+                    "symbol": a.get("symbol", ""),
+                    "name": a.get("name", ""),
+                    "entry_price": str(a.get("entry_price", "0")),
+                    "current_price": str(a.get("current_price", "0")),
+                    "confidence": 0.9,
+                    "reasoning": f"止盈触发：当前价¥{a.get('current_price')}已达目标价¥{a.get('target_price')}",
+                }, user_prefs=all_prefs)
+                await self.send_func("trade_result", {
+                    "ok": trade_result.get("ok", False),
+                    "action": "SELL",
+                    "symbol": a.get("symbol", ""),
+                    "name": a.get("name", ""),
+                    "reason": f"🎯 止盈卖出: {trade_result.get('reason', '止盈触发')}",
+                    "amount_cny": str(trade_result.get("amount_cny", "")),
+                })
+
         await self._emit_step("mid_review", "done", summary[:80])
 
     async def _phase_pre_close(self):
         await self._emit_step("pre_close", "running", "尾盘评估中...")
         positions = self.journal.get_open_positions_summary()
         if not positions:
+            await self.send_func("chat", {
+                "text": "📊 尾盘评估：当前无持仓，全天观望",
+                "expression": "neutral",
+            })
             await self._emit_step("pre_close", "done", "尾盘评估：无持仓")
             return
 
@@ -350,11 +555,37 @@ class TradingScheduler:
         stop_alerts = [a for a in alerts if a["trigger"] == "stop_loss"]
         target_alerts = [a for a in alerts if a["trigger"] == "take_profit"]
 
-        recs = []
+        try:
+            from potato.user_prefs import UserPrefs
+            prefs = UserPrefs()
+            all_prefs = prefs.get_all()
+        except Exception:
+            all_prefs = {}
+
+        executed_trades = []
         for a in stop_alerts:
-            recs.append(f"🛑 建议{a['name']}({a['symbol']})止损——当前¥{a['current_price']}已破止损价¥{a['stop_loss_price']}")
+            result = await self.execute_trade_decision({
+                "action": "SELL",
+                "symbol": a.get("symbol", ""),
+                "name": a.get("name", ""),
+                "entry_price": str(a.get("entry_price", "0")),
+                "current_price": str(a.get("current_price", "0")),
+                "confidence": 0.95,
+                "reasoning": f"尾盘止损触发：当前价¥{a.get('current_price')}已跌破止损价¥{a.get('stop_loss_price')}",
+            }, user_prefs=all_prefs)
+            executed_trades.append(("🛑 止损卖出", a.get("name", ""), a.get("symbol", ""), result))
+
         for a in target_alerts:
-            recs.append(f"🎯 建议{a['name']}({a['symbol']})止盈——当前¥{a['current_price']}已达目标价")
+            result = await self.execute_trade_decision({
+                "action": "SELL",
+                "symbol": a.get("symbol", ""),
+                "name": a.get("name", ""),
+                "entry_price": str(a.get("entry_price", "0")),
+                "current_price": str(a.get("current_price", "0")),
+                "confidence": 0.9,
+                "reasoning": f"尾盘止盈触发：当前价¥{a.get('current_price')}已达目标价¥{a.get('target_price')}",
+            }, user_prefs=all_prefs)
+            executed_trades.append(("🎯 止盈卖出", a.get("name", ""), a.get("symbol", ""), result))
 
         near_close = []
         for pos in positions:
@@ -366,22 +597,32 @@ class TradingScheduler:
                 except Exception:
                     pass
 
-        summary_lines = [f"尾盘评估：{len(positions)}只持仓"]
-        if recs:
-            summary_lines.append("需要操作的：")
-            summary_lines.extend(recs)
+        summary_lines = [f"📊 尾盘评估：{len(positions)}只持仓"]
+        if executed_trades:
+            summary_lines.append("AI自动执行：")
+            for label, name, symbol, result in executed_trades:
+                status = "✅" if result.get("ok") else "❌"
+                summary_lines.append(f"  {status} {label} {name}({symbol})")
         if near_close:
             summary_lines.append("距离止损近的：")
             summary_lines.extend(near_close)
-        if not recs and not near_close:
-            summary_lines.append("所有持仓风控正常，无需操作")
+        remaining = [pos for pos in positions if not any(
+            a.get("symbol") == pos.get("symbol") for a in (stop_alerts + target_alerts)
+        )]
+        if remaining:
+            summary_lines.append(f"继续持有{len(remaining)}只过夜")
 
         summary = "\n".join(summary_lines)
+        await self.send_func("chat", {
+            "text": summary,
+            "expression": "thinking" if executed_trades else "happy",
+        })
+
         await self._emit("pre_close_result", {
             "positions": len(positions),
             "stop_alerts": len(stop_alerts),
             "target_alerts": len(target_alerts),
-            "recommendations": recs,
+            "executed": len(executed_trades),
             "near_stop_loss": near_close,
             "summary": summary,
         })
@@ -421,6 +662,11 @@ class TradingScheduler:
             summary += f"\n\n📈 当前持仓{len(positions)}只:"
             for pos in positions:
                 summary += f"\n  {pos['name']}({pos['symbol']}) 入场¥{pos['entry_price']} 目标¥{pos['target_price']} 止损¥{pos['stop_loss_price']}"
+
+        await self.send_func("chat", {
+            "text": summary,
+            "expression": "happy" if review.total_pnl and float(review.total_pnl) >= 0 else "sad",
+        })
 
         await self._emit("daily_summary", {
             "trades": review.total_trades,

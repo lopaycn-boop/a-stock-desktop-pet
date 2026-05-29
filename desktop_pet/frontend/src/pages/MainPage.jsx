@@ -1,11 +1,13 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import Live2DController from '../components/Live2D/Live2DController';
 import LoadingDots from '../components/LoadingDots';
+import ModelPicker from '../components/ModelPicker';
 import '../App.css';
 
 import { useAudioQueue } from '../hooks/useAudioQueue';
 import { useNeuroSocket } from '../hooks/useNeuroSocket';
 import { useClickThrough } from '../hooks/useClickThrough';
+import { getSavedModelId, saveModelId } from '../components/Live2D/modelRegistry';
 
 const SECRET_PATTERNS = [
   { re: /(sk-[a-zA-Z0-9]{8,})/gi, label: 'API_KEY' },
@@ -63,7 +65,7 @@ function detectKey(text) {
     }
   }
   if (trimmed.length >= 20 && /^[a-zA-Z0-9\-_\.]+$/.test(trimmed)) {
-    return { key: '', value: trimmed };
+    return { key: 'MANUAL_KEY', value: trimmed };
   }
   return null;
 }
@@ -87,6 +89,8 @@ export default function MainPage() {
   const [vaultReady, setVaultReady] = useState(null);
   const [recording, setRecording] = useState(false);
   const [renewalProviders, setRenewalProviders] = useState([]);
+  const [currentModel, setCurrentModel] = useState(getSavedModelId);
+  const [bytebotTaskId, setBytebotTaskId] = useState(null);
   const messagesEndRef = useRef(null);
   const live2dRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -118,8 +122,8 @@ export default function MainPage() {
         setRecording(false);
         break;
       case 'vault_stored':
-        setVaultReady(true);
         setMessages(prev => [...prev, { type: 'system', content: `✅ ${payload.key} 已保存` }]);
+        sendPacket({ type: 'vault_status', payload: {} });
         break;
       case 'quota_exhausted': {
         const providers = payload.providers || [];
@@ -144,12 +148,13 @@ export default function MainPage() {
       }
       case 'vault_status': {
         const total = payload.total_keys || 0;
-        const missing = (payload.missing_required || []).map(m => m.desc || m.key).join('、');
-        setVaultReady(!missing);
+        const missingArr = payload.missing_required || [];
+        const missing = missingArr.map(m => m.desc || m.key).join('、');
+        setVaultReady(missingArr.length === 0);
         const statusMsg = total > 0 && !missing
           ? '✅ 密钥已就绪，可以对话了'
-          : total > 0 ? `已有 ${total} 个密钥，还缺：${missing}`
-          : '🔐 还没有密钥，粘贴 sk-xxx 即可开始';
+          : total > 0 ? `已有 ${total} 个密钥，还缺：${missing} — 粘贴给我就行`
+          : '🔐 还没有密钥，粘贴你的 API Key（sk-xxx）即可开始';
         setMessages(prev => {
           const last = prev[prev.length - 1];
           if (last && last.type === 'system' && last.content.includes('密钥')) {
@@ -229,6 +234,7 @@ export default function MainPage() {
       }
       case 'bytebot_task_created': {
         const tid = (payload.task_id || '').slice(0, 8);
+        setBytebotTaskId(payload.task_id);
         setMessages(prev => [...prev, { type: 'system', content: `🤖 Bytebot 任务已创建 (${tid}...)` }]);
         break;
       }
@@ -236,6 +242,7 @@ export default function MainPage() {
         const statusCn = payload.status_cn || payload.status || '';
         const elapsed = payload.elapsed ? ` (${payload.elapsed}s)` : '';
         const errMsg = payload.error ? ` - ${payload.error}` : '';
+        if (payload.task_id) setBytebotTaskId(payload.task_id);
         setMessages(prev => [...prev, { type: 'system', content: `🤖 Bytebot: ${statusCn}${elapsed}${errMsg}` }]);
         break;
       }
@@ -243,6 +250,7 @@ export default function MainPage() {
         const doneStatus = payload.status === 'COMPLETED' ? '✅ 完成' : payload.status === 'FAILED' ? '❌ 失败' : payload.status;
         const doneElapsed = payload.elapsed ? ` (${payload.elapsed}s)` : '';
         const doneErr = payload.error ? `: ${payload.error}` : '';
+        setBytebotTaskId(null);
         setMessages(prev => [...prev, { type: 'system', content: `🤖 Bytebot 任务${doneStatus}${doneElapsed}${doneErr}` }]);
         break;
       }
@@ -276,6 +284,7 @@ export default function MainPage() {
         break;
       }
       case 'bytebot_task_cancelled': {
+        setBytebotTaskId(null);
         setMessages(prev => [...prev, { type: 'system', content: `🤖 任务已取消` }]);
         break;
       }
@@ -507,6 +516,25 @@ export default function MainPage() {
   }, [connected]);
 
   useEffect(() => {
+    const handler = (action) => {
+      if (action === 'trade_analysis') {
+        setChatOpen(true);
+        sendPacket({ type: 'text_input', payload: { text: '帮我分析最近值得关注的股票' } });
+      } else if (action === 'trade_status') {
+        setChatOpen(true);
+        sendPacket({ type: 'trade_status', payload: {} });
+      } else if (action === 'cleanup_pc') {
+        setChatOpen(true);
+        sendPacket({ type: 'cleanup_pc', payload: { level: 'quick' } });
+      }
+    };
+    if (window.potatoAPI && window.potatoAPI.onTrayAction) {
+      window.potatoAPI.onTrayAction(handler);
+    }
+    return () => {};
+  }, [sendPacket]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, actionSteps]);
 
@@ -596,8 +624,12 @@ export default function MainPage() {
 
     const detected = detectKey(text);
     if (detected) {
-      sendPacket({ type: 'vault_store', payload: { key: detected.key || 'MANUAL_KEY', value: detected.value } });
-      setMessages(prev => [...prev, { type: 'system', content: '🔐 正在保存密钥...' }]);
+      if (detected.key === 'MANUAL_KEY') {
+        setMessages(prev => [...prev, { type: 'system', content: '⚠️ 未能识别密钥类型，请用格式 key=value 粘贴（如 DEEPSEEK_API_KEY=sk-xxx）' }]);
+        return;
+      }
+      sendPacket({ type: 'vault_store', payload: { key: detected.key, value: detected.value } });
+      setMessages(prev => [...prev, { type: 'system', content: `🔐 正在保存 ${detected.key}...` }]);
       return;
     }
 
@@ -631,6 +663,13 @@ export default function MainPage() {
     setRenewalProviders([]);
   };
 
+  const handleModelSwitch = (modelId) => {
+    setCurrentModel(modelId);
+    saveModelId(modelId);
+    const config = getModelConfig(modelId);
+    setMessages(prev => [...prev, { type: 'system', content: `🎭 切换模型: ${config ? (config.nameZh || config.name) : modelId}` }]);
+  };
+
   const stateLabel = recording ? '🎤 录音中' : neuroState === 'thinking' ? '思考中...' : neuroState === 'speaking' ? '说话中' : '待命';
   const stateColor = recording ? '#ff8a80' : neuroState === 'thinking' ? '#64b5f6' : neuroState === 'speaking' ? '#ffb74d' : '#69f0ae';
 
@@ -638,7 +677,8 @@ export default function MainPage() {
     <div className="app">
       {/* 桌宠：全屏 */}
       <div className="pet-layer">
-        <Live2DController ref={live2dRef} />
+        <Live2DController ref={live2dRef} modelId={currentModel} />
+        <ModelPicker currentModel={currentModel} onSwitch={handleModelSwitch} />
 
         {recording && <div className="recording-ring" />}
         {recording && <div className="recording-ring-text">🎤</div>}
@@ -739,7 +779,19 @@ export default function MainPage() {
           />
           <button className="send-btn" onClick={handleSend} disabled={!inputText.trim()} title="发送">&#10148;</button>
         </div>
-        {renewalProviders.length > 0 && (
+        {bytebotTaskId && (
+            <div className="renewal-bar">
+              <button
+                className="renewal-btn"
+                onClick={() => { sendPacket({ type: 'bytebot_cancel', payload: { task_id: bytebotTaskId } }); }}
+                style={{ background: 'linear-gradient(135deg, #ef4444, #f87171)', borderColor: 'rgba(239,68,68,0.5)' }}
+                title="取消正在执行的Bytebot任务"
+              >
+                ⏹ 取消任务
+              </button>
+            </div>
+          )}
+          {renewalProviders.length > 0 && (
           <div className="renewal-bar">
             {renewalProviders.map(p => (
               <button

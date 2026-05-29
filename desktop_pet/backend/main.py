@@ -87,8 +87,57 @@ async def lifespan(app: FastAPI):
     logger.info("Pet backend starting (pid=%s)", os.getpid())
     db_result = await asyncio.to_thread(init_db)
     logger.info("Database init result: %s", db_result)
+
+    agent_port = int(os.getenv("BYTEBOT_AGENT_PORT", "9991"))
+    _agent_process = None
+    try:
+        import subprocess as _sp
+        agent_script = Path(__file__).resolve().parent / "bytebot_agent.py"
+        if agent_script.exists():
+            logger.info("Starting built-in Bytebot Agent on port %d...", agent_port)
+            _agent_process = _sp.Popen(
+                [sys.executable, str(agent_script)],
+                env={**os.environ, "BYTEBOT_AGENT_PORT": str(agent_port)},
+                stdout=_sp.PIPE, stderr=_sp.PIPE,
+            )
+            logger.info("Bytebot Agent process started (pid=%s)", _agent_process.pid)
+    except Exception as e:
+        logger.warning("Could not start Bytebot Agent: %s", e)
+
+    async def _auto_start_scheduler():
+        await asyncio.sleep(5)
+        global _trading_scheduler
+        if _trading_scheduler and _trading_scheduler._running:
+            return
+        from datetime import datetime, timezone, timedelta
+        now_bjt = datetime.now(tz=timezone(timedelta(hours=8)))
+        if now_bjt.weekday() < 5:
+            _trading_scheduler = TradingScheduler(
+                lambda e, d: asyncio.create_task(_broadcast_event(e, d))
+            )
+            _trading_scheduler.start()
+            logger.info("Auto-started trading scheduler (weekday, BJT %s)", now_bjt.strftime("%H:%M"))
+
+    async def _broadcast_event(event_type, data):
+        for ws in list(active_websockets):
+            try:
+                await ws.send_json({"type": event_type, "payload": data})
+            except Exception:
+                pass
+
+    _spawn(_auto_start_scheduler())
+
     yield
+
     logger.info("Pet backend shutting down")
+    if _agent_process and _agent_process.poll() is None:
+        logger.info("Stopping Bytebot Agent...")
+        _agent_process.terminate()
+        try:
+            _agent_process.wait(timeout=5)
+        except Exception:
+            _agent_process.kill()
+
     global _trading_scheduler
     if _trading_scheduler and _trading_scheduler._running:
         _trading_scheduler.stop()
@@ -320,18 +369,22 @@ class PotatoPetBrain:
 24. 清理只针对系统临时目录、浏览器缓存、回收站等安全目标，绝不删除用户文档、图片、桌面文件
 25. 用户说"分析XX股票/选股/看盘" → trade_analysis=["代码1","代码2"]或trade_analysis="600519,000858"
 26. 用户说"买入/卖出XX" → trade_execute={{"symbol":"代码","name":"名称","action":"BUY/SELL","confidence":0.8,"reasoning":"理由","entry_price":"价格","target_price":"目标价","stop_loss":"止损价"}}
-27. 用户说"自动操盘/自己盯盘/帮我全天盯盘" → trade_auto_start=true
-28. 用户说"停止操盘/取消自动" → 告知用户可以发trade_auto_stop停止
+27. 【自主操盘】操盘调度器在交易日自动启动，4个阶段全自动运行：
+    - 盘前扫描(9:00) → AI自动抓新闻+筛选标的
+    - 开盘分析(9:25) → AI深度分析+自动执行交易（通过风控后直接下单）
+    - 午间复盘(11:30) → AI检查持仓+自动止损止盈
+    - 盘后复盘(15:10) → AI做当日复盘+总结
+    用户不需要说"开始操盘"，系统自动运行。用户只需在第一次使用时确认资金金额。
+28. 用户说"停止操盘" → trade_auto_stop，但默认是自动启动的
 29. 选股必须三层逻辑：技术面信号 + 消息面关联 + 基本面估值
 30. 每次交易执行前必须通过风控检查——止损价不设不通过
-31. 风控参数必须由用户确认才能生效——绝不自己设定限额！限额用户说了算，想买100万就100万！
-    - 每天开盘前(9:10)系统会问用户确认今日参数
+31. 【唯一人控项】资金金额由用户决定：
+    - 第一次使用时系统会问用户"你要投入多少钱？单笔最多多少？"
     - 用户说多少就是多少，不设上限——想买1万就1万，想买100万就100万
-    - 10分钟用户没回答→沿用昨日参数
-    - 用户回答后 → update_risk={{"max_daily_cny":数字,"max_single_cny":数字,"positions":数字,"stop_loss_pct":比例,"risk_confirmed":true}}
-    - 用户说"保守点/激进点/稳健一点" → update_risk={{"risk_level":"conservative/moderate/aggressive","risk_confirmed":true}}
-    - 更新后立即回复确认，告诉用户当前完整风控设置
-32. 风控未确认时禁止任何交易——风控引擎Rule 0自动拦截
+    - 确认后系统记住，每天沿用，用户随时可以改
+    - 止损/止盈比例由AI根据市场波动自动设置（默认止损5%/止盈10%）
+    - 用户说"保守点/激进点" → update_risk={{"risk_level":"conservative/moderate/aggressive","risk_confirmed":true}}
+32. 风控未确认时只禁止交易执行，不禁止分析和复盘
 33. 每日开盘严格流程——不可跳过任何步骤：
     - 9:00 盘前扫描（新闻、隔夜行情、持仓检查）
     - 9:10 确认今日风控参数（问用户，10分钟超时沿用昨日）
@@ -340,7 +393,7 @@ class PotatoPetBrain:
     - 11:30 午间复盘（持仓检查+警报）
     - 14:30 尾盘评估（操作建议）
     - 15:10 盘后深度复盘（胜率/盈亏比/AI反思）
-34. 用户说"复盘/看看今天交易/交易记录" → trade_review={"date":"今天日期"}
+34. 用户说"复盘/看看今天交易/交易记录" → trade_review={{"date":"今天日期"}}
 35. 用户说"持仓情况/还持有什么" → position_status=true
 36. 用户说"平仓XX/卖掉XX/止盈/止损XX" → close_position={{"trade_id":"从position_status获取","exit_price":"0(自动获取)","reason":"用户说的原因"}}
 37. 每次平仓后，系统自动记录P&L、预测对错、止盈止损是否触发
@@ -782,7 +835,7 @@ async def handle_user_input(text: str, send_func):
 
     except Exception as e:
         logger.warning("Handle error: %s", e)
-        await send_func("state_update", {"state": "idle"})
+        await send_func("chat", {"text": f"出了点小问题：{str(e)[:100]}", "expression": "sad"})
     finally:
         brain.state = "idle"
         brain.last_interaction = time.time()
@@ -829,7 +882,7 @@ async def _process_ai_actions(actions: dict, send_func):
 
     _ALLOWED_PLATFORMS = {"eastmoney", "tonghuashun", "xueqiu", "ths", "em"}
     _ALLOWED_RISK_LEVELS = {"conservative", "moderate", "aggressive"}
-    _DANGEROUS_BYTEBOT_ACTIONS = {"write_file", "press_keys"}
+    _DANGEROUS_BYTEBOT_ACTIONS = {"write_file", "read_file", "press_keys"}
     _MAX_TASK_DESC_LEN = 500
     _MAX_BYTEBOT_TEXT_LEN = 1000
 
@@ -1066,6 +1119,7 @@ async def _process_ai_actions(actions: dict, send_func):
                             value=key_val,
                             platform_id=str(sk.get("platform_id", "")).strip()[:50],
                         )
+                        await _refresh_config_for_key(key_name, key_val)
                         await send_func("vault_stored", {"key": key_name})
                         await _emit_step(send_func, "store_key", "done", key_name)
                 else:
@@ -1205,12 +1259,19 @@ async def send_reply(text: str, emotion: str, send_func):
         tts_text = text
     estimated_duration = len(tts_text) * 0.25 + 1.0
     brain.last_interaction = time.time() + estimated_duration
+    audio_b64 = None
     try:
         from potato.voice import text_to_speech
         audio_b64 = await text_to_speech(tts_text, emotion, profile_id=_current_voice_profile)
     except Exception:
-        audio_b64 = await AIService.text_to_speech(tts_text, emotion)
-    await send_func("audio_chunk", {"text": text, "audio_base64": audio_b64, "expression": emotion})
+        try:
+            audio_b64 = await AIService.text_to_speech(tts_text, emotion)
+        except Exception:
+            logger.debug("TTS unavailable, sending text-only reply")
+    if audio_b64:
+        await send_func("audio_chunk", {"text": text, "audio_base64": audio_b64, "expression": emotion})
+    else:
+        await send_func("chat", {"text": text, "expression": emotion})
 
 
 async def trigger_analysis(send_func):
@@ -1640,11 +1701,35 @@ async def handle_get_memory(payload: dict, send_func):
         await send_func("error", {"info": str(e)})
 
 
+async def _refresh_config_for_key(key_upper: str, value: str):
+    """Refresh runtime Config + provider client caches after a key is stored."""
+    from services import _reset_main_client, _reset_audio_client
+    if key_upper == "DEEPSEEK_API_KEY":
+        Config.LLM_API_KEY = value
+        _reset_main_client()
+    elif key_upper == "SILICON_API_KEY":
+        Config.SILICON_KEY = value
+        _reset_audio_client()
+        _reset_main_client()
+    elif key_upper == "LINER_API_KEY":
+        Config.LINER_KEY = value
+        _reset_main_client()
+    elif key_upper == "OPENAI_API_KEY":
+        Config.OPENAI_KEY = value
+        _reset_main_client()
+    elif key_upper in ("BYTEBOT_AGENT_URL", "BYTEBOT_DESKTOP_URL"):
+        try:
+            from bytebot_client import _bytebot_client
+            _bytebot_client.agent_url = None
+            _bytebot_client.desktop_url = None
+        except Exception:
+            pass
+
+
 async def handle_vault_store(payload: dict, send_func):
     """Store a key in the vault and refresh runtime config."""
     try:
         from potato.vault import Vault
-        from services import _reset_main_client, _reset_audio_client
         vault = Vault()
         key = payload.get("key", "")
         value = payload.get("value", "")
@@ -1664,24 +1749,14 @@ async def handle_vault_store(payload: dict, send_func):
             platform_id=payload.get("platform_id", ""),
             description=payload.get("description", ""),
         )
-        if key_upper == "DEEPSEEK_API_KEY":
-            Config.LLM_API_KEY = value
-            _reset_main_client()
-        elif key_upper == "SILICON_API_KEY":
-            Config.SILICON_KEY = value
-            _reset_audio_client()
-        elif key_upper == "LINER_API_KEY":
-            Config.LINER_KEY = value
-            _reset_main_client()
-        elif key_upper == "OPENAI_API_KEY":
-            Config.OPENAI_KEY = value
-            _reset_main_client()
-        elif key_upper in ("BYTEBOT_AGENT_URL", "BYTEBOT_DESKTOP_URL"):
-            from bytebot_client import _bytebot_client
-            _bytebot_client.agent_url = None
-            _bytebot_client.desktop_url = None
+        await _refresh_config_for_key(key_upper, value)
         await send_func("vault_stored", result)
-        await send_reply(f"{key_desc} 存好了！现在可以用了~ 🥔", "happy", send_func)
+        vault_status = vault.status()
+        missing = [m["desc"] for m in vault_status.get("missing_required", [])]
+        if missing:
+            await send_reply(f"{key_desc} 存好了！还缺：{'、'.join(missing)}~ 🥔", "happy", send_func)
+        else:
+            await send_reply(f"{key_desc} 存好了！所有核心密钥齐全，可以开始用了~ 🥔", "happy", send_func)
     except Exception as e:
         await send_func("error", {"info": str(e)})
 
@@ -1913,6 +1988,11 @@ async def handle_bytebot_task(payload: dict, send_func):
         await send_func("error", {"info": "需要指定任务描述"})
         return
 
+    _MAX_TASK_DESC_LEN = 500
+    if len(description) > _MAX_TASK_DESC_LEN:
+        description = description[:_MAX_TASK_DESC_LEN]
+        await send_func("state_update", {"state": "thinking"})
+
     await send_func("state_update", {"state": "thinking"})
     await send_reply(f"正在创建 Bytebot 任务: {description[:80]}...", "happy", send_func)
 
@@ -1979,11 +2059,14 @@ async def handle_bytebot_status(send_func):
 
         tasks = []
         if agent_ok:
-            session = await client._get_session()
-            async with session.get(f"{client.agent_url}/tasks", params={"limit": 5}) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    tasks = data.get("tasks", [])
+            try:
+                session = await client._get_session()
+                async with session.get(f"{client.agent_url}/tasks", params={"limit": 5}) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        tasks = data.get("tasks", [])
+            except Exception:
+                logger.warning("Failed to query recent tasks")
 
         await send_func("bytebot_status", {
             "agent_available": agent_ok,
@@ -1996,7 +2079,29 @@ async def handle_bytebot_status(send_func):
         })
 
         if not agent_ok:
-            await send_reply("Bytebot 未运行。启动方式: docker compose -f docker/docker-compose.pet.yml up -d 🥔", "neutral", send_func)
+            await send_reply("Bytebot Agent 未运行，正在自动启动... 🥔", "neutral", send_func)
+            try:
+                import subprocess as _sp
+                agent_script = Path(__file__).resolve().parent / "bytebot_agent.py"
+                if agent_script.exists():
+                    _sp.Popen(
+                        [sys.executable, str(agent_script)],
+                        env={**os.environ, "BYTEBOT_AGENT_PORT": "9991"},
+                        stdout=_sp.PIPE, stderr=_sp.PIPE,
+                    )
+                    await asyncio.sleep(2)
+                    agent_ok = await client.is_available()
+            except Exception as e:
+                logger.warning("Auto-start agent failed: %s", e)
+
+        await send_func("bytebot_status", {
+            "agent_available": agent_ok,
+            "desktop_available": desktop_ok,
+            "recent_tasks": [],
+        })
+
+        if not agent_ok:
+            pass
         else:
             status_parts = [f"Agent ✅"]
             if desktop_ok:

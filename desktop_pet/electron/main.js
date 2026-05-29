@@ -96,21 +96,95 @@ function findPython() {
 
 // ── Start backend ──
 function startBackend() {
+  // Dev mode: if backend is already running on BACKEND_PORT, skip spawning
+  const http = require('http');
+  const req = http.get(`http://127.0.0.1:${BACKEND_PORT}/health`, (res) => {
+    res.resume();
+    if (res.statusCode === 200) {
+      console.log(`[electron] Backend already running on port ${BACKEND_PORT}, skipping spawn`);
+      return;
+    }
+    _spawnBackend();
+  });
+  req.on('error', () => { _spawnBackend(); });
+  req.end();
+}
+
+// ── Start Bytebot Agent ──
+let agentProc = null;
+function startBytebotAgent() {
+  const agentPort = process.env.BYTEBOT_AGENT_PORT || '9991';
+  // Check if already running
+  const req = http.get(`http://127.0.0.1:${agentPort}/health`, (res) => {
+    res.resume();
+    if (res.statusCode === 200) {
+      console.log(`[electron] Bytebot Agent already running on port ${agentPort}`);
+      return;
+    }
+    _spawnAgent();
+  });
+  req.on('error', () => { _spawnAgent(); });
+  req.end();
+}
+
+function _spawnAgent() {
+  const python = findPython();
+  const agentScript = path.join(__dirname, '..', 'backend', 'bytebot_agent.py');
+  if (!fs.existsSync(agentScript)) {
+    console.log('[electron] bytebot_agent.py not found, skipping agent start');
+    return;
+  }
+  const agentPort = process.env.BYTEBOT_AGENT_PORT || '9991';
+  const env = { ...process.env, BYTEBOT_AGENT_PORT: agentPort };
+  agentProc = spawn(python, [agentScript], {
+    cwd: path.dirname(agentScript),
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: true,
+  });
+  agentProc.stdout.on('data', (data) => {
+    console.log(`[agent] ${data.toString().trim()}`);
+  });
+  agentProc.stderr.on('data', (data) => {
+    console.error(`[agent] ${data.toString().trim()}`);
+  });
+  agentProc.on('close', (code) => {
+    if (!isQuitting) {
+      console.log(`Bytebot Agent exited with code ${code}, restarting in 5s...`);
+      setTimeout(() => _spawnAgent(), 5000);
+    }
+  });
+  console.log(`[electron] Bytebot Agent started on port ${agentPort}`);
+}
+
+function _spawnBackend() {
   const python = findPython();
   const backendDir = path.join(process.resourcesPath || path.join(__dirname, '..'), 'backend');
   const mainPy = path.join(backendDir, 'main.py');
 
   if (!fs.existsSync(mainPy)) {
-    console.error(`Backend not found at ${mainPy}`);
-    return;
+    console.error(`Backend not found at ${mainPy}, trying project root backend`);
+    const altMainPy = path.join(__dirname, '..', 'backend', 'main.py');
+    if (!fs.existsSync(altMainPy)) {
+      console.error(`Backend not found at ${altMainPy} either, relying on existing backend`);
+      return;
+    }
   }
 
   const env = { ...process.env };
-  // Auto-set PORT
   env.PORT = String(BACKEND_PORT);
+  env.PYTHONPATH = [
+    path.join(__dirname, '..', '..'),
+    path.join(__dirname, '..', 'backend'),
+  ].join(path.delimiter) + (env.PYTHONPATH ? path.delimiter + env.PYTHONPATH : '');
 
-  backendProc = spawn(python, [mainPy], {
-    cwd: backendDir,
+  const mainPyPath = fs.existsSync(path.join(__dirname, '..', 'backend', 'main.py'))
+    ? path.join(__dirname, '..', 'backend', 'main.py')
+    : mainPy;
+  const cwd = path.dirname(mainPyPath);
+
+  backendProc = spawn(python, [mainPyPath], {
+    cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: true,
@@ -125,7 +199,7 @@ function startBackend() {
   backendProc.on('close', (code) => {
     if (!isQuitting) {
       console.log(`Backend exited with code ${code}, restarting in 3s...`);
-      setTimeout(startBackend, 3000);
+      setTimeout(() => _spawnBackend(), 3000);
     }
   });
 }
@@ -207,7 +281,7 @@ function createTray() {
   const contextMenu = Menu.buildFromTemplate([
     { label: '显示小土豆', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
     { label: '分析选股', click: () => { mainWindow?.show(); mainWindow?.webContents.send('tray-action', 'trade_analysis'); } },
-    { label: '自主操盘', click: () => { mainWindow?.show(); mainWindow?.webContents.send('tray-action', 'trade_auto_start'); } },
+    { label: '操盘状态', click: () => { mainWindow?.show(); mainWindow?.webContents.send('tray-action', 'trade_status'); } },
     { label: '清理电脑', click: () => { mainWindow?.show(); mainWindow?.webContents.send('tray-action', 'cleanup_pc'); } },
     { type: 'separator' },
     { label: '重启后端', click: () => { if (backendProc) backendProc.kill(); startBackend(); } },
@@ -364,6 +438,9 @@ app.whenReady().then(async () => {
     console.error('Backend failed to start within 30s');
   }
 
+  // Start Bytebot Agent
+  startBytebotAgent();
+
   // Create UI
   createWindow();
   createTray();
@@ -403,6 +480,9 @@ app.on('before-quit', () => {
   isQuitting = true;
   if (backendProc) {
     backendProc.kill('SIGTERM');
+  }
+  if (agentProc) {
+    agentProc.kill('SIGTERM');
   }
   globalShortcut.unregisterAll();
 });
