@@ -21,9 +21,11 @@
       "package.json",
       "../frontend/dist/**/*",
       "../backend/**/*",
-      "../potato/**/*",
+      "../../potato/**/*",
       "!../**/__pycache__/**",
-      "!../**/node_modules/**"
+      "!../../**/__pycache__/**",
+      "!../**/node_modules/**",
+      "!../../**/node_modules/**"
     ],
     "extraResources": [
       {
@@ -32,12 +34,12 @@
         "filter": ["**/*", "!__pycache__/**"]
       },
       {
-        "from": "../potato",
+        "from": "../../potato",
         "to": "potato",
         "filter": ["**/*", "!__pycache__/**"]
       },
       {
-        "from": "../data",
+        "from": "../../data",
         "to": "data"
       }
     ],
@@ -48,7 +50,7 @@
           "arch": ["x64"]
         }
       ],
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.ico"
     },
     "nsis": {
       "oneClick": true,
@@ -58,7 +60,7 @@
       "deleteAppDataOnUninstall": false,
       "installerLanguages": ["zh-CN"],
       "language": 2052,
-      "installerIcon": "assets/icon.png",
+      "installerIcon": "assets/icon.ico",
       "unicode": true
     }
   },
