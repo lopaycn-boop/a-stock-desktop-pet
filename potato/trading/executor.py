@@ -31,6 +31,7 @@ from potato.trading.analyzer import (
     fetch_kline,
     technical_summary,
 )
+from potato.trading.broker import BrokerAdapter
 from potato.trading.journal import TradeJournal
 from potato.user_prefs import UserPrefs
 
@@ -68,8 +69,9 @@ class TradeExecutor:
     exactly what the AI is doing in real time.
     """
 
-    def __init__(self, send_func=None):
+    def __init__(self, send_func=None, broker: BrokerAdapter | None = None):
         self.send_func = send_func
+        self._broker = broker or BrokerAdapter()
         self._risk_state = RiskState(date=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         self.journal = TradeJournal()
         self._refresh_validator()
@@ -154,34 +156,39 @@ class TradeExecutor:
         return None
 
     async def _execute_on_platform(self, trade: TradeDecision, platform_id: str) -> dict[str, Any]:
-        await self._emit_step("open_platform", "running", f"打开 {platform_id} 交易平台")
-        try:
-            from potato.browser.desktop_apps import launch_or_browser
-            result = launch_or_browser(platform_id)
-            if result.get("mode") == "desktop_app":
-                await self._emit_step("open_platform", "done", f"已启动桌面APP: {result.get('app', platform_id)}")
-            else:
-                import webbrowser
-                from potato.browser.platforms import BUILTIN_PLATFORMS
-                url = BUILTIN_PLATFORMS.get(platform_id, BUILTIN_PLATFORMS.get("eastmoney")).url
-                webbrowser.open(url)
-                await self._emit_step("open_platform", "done", f"已打开浏览器: {platform_id}")
-        except Exception as e:
-            await self._emit_step("open_platform", "error", f"无法打开平台: {e}")
-            return {"ok": False, "reason": f"无法打开平台: {e}"}
-
+        mode_label = "真实交易" if self._broker.is_live else "模拟交易"
         action_label = "买入" if trade.action == "BUY" else "卖出"
-        await self._emit_step("navigate_stock", "running", f"搜索 {trade.name}({trade.symbol})")
-        await asyncio.sleep(2)
 
-        await self._emit_step("fill_order", "running",
-                              f"{action_label} {trade.name} ¥{trade.price} × {trade.quantity}股 = ¥{trade.amount_cny}")
+        await self._emit_step("broker_connect", "running", f"连接券商（{mode_label}模式）...")
+        health = await self._broker.health_check()
+        if not health.get("ok"):
+            await self._emit_step("broker_connect", "error", f"券商连接失败: {health.get('message', '未知')}")
+            return {"ok": False, "reason": f"券商连接失败: {health.get('message', '')}"}
+        await self._emit_step("broker_connect", "done", f"券商已连接（{mode_label}模式）")
 
-        await self._emit_step("confirm_order", "running", "确认订单中...")
-        await asyncio.sleep(1)
+        await self._emit_step("order_submit", "running",
+                              f"{action_label} {trade.name}({trade.symbol}) ¥{trade.price} × {trade.quantity}股 = ¥{trade.amount_cny}")
 
-        await self._emit_step("confirm_order", "done",
-                              f"{action_label}已提交: {trade.name}({trade.symbol}) ¥{trade.amount_cny}")
+        if trade.action == "BUY":
+            order = await self._broker.buy(
+                symbol=trade.symbol, name=trade.name,
+                price=trade.price, quantity=trade.quantity,
+            )
+        elif trade.action == "SELL":
+            order = await self._broker.sell(
+                symbol=trade.symbol, name=trade.name,
+                price=trade.price, quantity=trade.quantity,
+            )
+        else:
+            await self._emit_step("order_submit", "error", f"未知操作: {trade.action}")
+            return {"ok": False, "reason": f"未知操作: {trade.action}"}
+
+        if not order.ok:
+            await self._emit_step("order_submit", "error", f"下单失败: {order.message}")
+            return {"ok": False, "reason": order.message}
+
+        await self._emit_step("order_submit", "done",
+                              f"{action_label}委托成功: {trade.name}({trade.symbol}) ¥{trade.amount_cny} [{order.order_id}]")
 
         await self._emit("trade_result", {
             "ok": True,
@@ -197,11 +204,14 @@ class TradeExecutor:
             "target_price": trade.target_price,
             "stop_loss": trade.stop_loss,
             "platform": platform_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "order_id": order.order_id,
+            "mode": order.mode,
+            "timestamp": order.timestamp or datetime.now(timezone.utc).isoformat(),
         })
 
-        logger.info("Trade executed: %s %s ¥%s (confidence=%.2f)",
-                     trade.action, trade.symbol, trade.amount_cny, float(trade.confidence))
+        logger.info("Trade executed [%s]: %s %s ¥%s (confidence=%.2f, mode=%s, order_id=%s)",
+                     order.mode, trade.action, trade.symbol, trade.amount_cny,
+                     float(trade.confidence), order.mode, order.order_id)
 
         if trade.action == "BUY":
             self.journal.record_entry(
@@ -250,69 +260,63 @@ class TradeExecutor:
             "symbol": trade.symbol,
             "name": trade.name,
             "amount_cny": str(trade.amount_cny),
+            "order_id": order.order_id,
+            "mode": order.mode,
         }
 
     async def execute_bytebot_desktop_trade(
         self, trade: TradeDecision, bytebot_client,
     ) -> dict[str, Any]:
         bytebot_avail = await bytebot_client.is_desktop_available()
-        if not bytebot_avail:
-            await self._emit_step("bytebot_connect", "error", "Bytebot桌面不可用，回退到本地浏览器")
-            return await self._execute_on_platform(trade, trade.platform_id or "eastmoney")
 
-        await self._emit_step("bytebot_connect", "running", "连接Bytebot桌面...")
-        await self._emit_step("bytebot_connect", "done", "Bytebot桌面已连接")
+        mode_label = "真实交易" if self._broker.is_live else "模拟交易"
+        action_label = "买入" if trade.action == "BUY" else "卖出"
 
-        await self._emit_step("open_platform", "running", f"在Bytebot桌面打开 {trade.platform_id or 'eastmoney'}")
+        if not bytebot_avail and self._broker.is_live:
+            await self._emit_step("bytebot_connect", "running", "Bytebot桌面不可用，直接通过券商API下单...")
+            result = await self._execute_on_platform(trade, trade.platform_id or "eastmoney")
+            return result
 
-        try:
-            result = await bytebot_client.computer_use("application", application="google-chrome")
-            if not result.get("ok"):
-                return {"ok": False, "reason": f"无法打开浏览器: {result.get('error')}"}
-            await asyncio.sleep(1)
+        if bytebot_avail:
+            await self._emit_step("bytebot_connect", "running", "连接Bytebot桌面...")
+            await self._emit_step("bytebot_connect", "done", "Bytebot桌面已连接")
 
-            from potato.browser.platforms import BUILTIN_PLATFORMS
-            platform = BUILTIN_PLATFORMS.get(trade.platform_id or "eastmoney")
-            if platform:
-                await self._emit_step("navigate", "running", f"导航到 {platform.name}")
-                await bytebot_client.computer_use("type_text", text=platform.url)
-                await bytebot_client.computer_use("type_text", text="\n")
-                await asyncio.sleep(2)
+            await self._emit_step("open_platform", "running", f"在Bytebot桌面打开 {trade.platform_id or 'eastmoney'}")
 
-                for _ in range(10):
-                    scr = await bytebot_client.computer_use("screenshot")
-                    await asyncio.sleep(1)
-                    if scr.get("ok"):
-                        break
+            try:
+                result = await bytebot_client.computer_use("application", application="google-chrome")
+                if not result.get("ok"):
+                    return {"ok": False, "reason": f"无法打开浏览器: {result.get('error')}"}
+                await asyncio.sleep(1)
 
-            screenshot = await bytebot_client.computer_use("screenshot")
-            if screenshot.get("image"):
-                await self._emit("trade_screenshot", {
-                    "step": "platform_loaded",
-                    "image": screenshot["image"],
-                })
+                from potato.browser.platforms import BUILTIN_PLATFORMS
+                platform = BUILTIN_PLATFORMS.get(trade.platform_id or "eastmoney")
+                if platform:
+                    await self._emit_step("navigate", "running", f"导航到 {platform.name}")
+                    await bytebot_client.computer_use("type_text", text=platform.url)
+                    await bytebot_client.computer_use("type_text", text="\n")
+                    await asyncio.sleep(2)
 
-            action_label = "买入" if trade.action == "BUY" else "卖出"
-            await self._emit_step("trade_action", "running",
-                                   f"Bytebot桌面 {action_label}: {trade.name}({trade.symbol})")
+                    for _ in range(10):
+                        scr = await bytebot_client.computer_use("screenshot")
+                        await asyncio.sleep(1)
+                        if scr.get("ok"):
+                            break
 
-            await self._emit_step("trade_action", "done",
-                                   f"{action_label}订单已通过Bytebot桌面提交")
+                screenshot = await bytebot_client.computer_use("screenshot")
+                if screenshot.get("image"):
+                    await self._emit("trade_screenshot", {
+                        "step": "platform_loaded",
+                        "image": screenshot["image"],
+                    })
+            except Exception as e:
+                await self._emit_step("bytebot_connect", "error", f"Bytebot操作失败: {e}")
 
-        except Exception as e:
-            await self._emit_step("bytebot_trade", "error", f"Bytebot执行失败: {e}")
-            return {"ok": False, "reason": f"Bytebot执行失败: {e}"}
+        if self._broker.is_live:
+            broker_result = await self._execute_on_platform(trade, trade.platform_id or "eastmoney")
+            return broker_result
 
-        await self._emit("trade_result", {
-            "ok": True,
-            "action": trade.action,
-            "symbol": trade.symbol,
-            "name": trade.name,
-            "price": str(trade.price),
-            "quantity": trade.quantity,
-            "amount_cny": str(trade.amount_cny),
-            "platform": trade.platform_id or "bytebot_desktop",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-
-        return {"ok": True, "action": trade.action, "symbol": trade.symbol}
+        await self._emit_step("trade_action", "running",
+                               f"{action_label}: {trade.name}({trade.symbol}) [{mode_label}]")
+        result = await self._execute_on_platform(trade, trade.platform_id or "eastmoney")
+        return result

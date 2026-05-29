@@ -171,6 +171,38 @@ python -m potato
 
 所有 6 款模型均已内置，开箱即用。模型来自 [Live2D Cubism SDK](https://www.live2d.com/en/learn/sample/) 免费素材（Free Material License Agreement）。
 
+## 💹 交易模式
+
+### 模拟交易（默认 — 安全）
+
+默认 `dry_run` 模式，所有交易均为模拟执行，**不会下真实订单**。适合验证策略、熟悉流程。
+
+### 实盘交易（需配置券商）
+
+切换到 `live` 模式后，小土豆通过 [easytrader](https://github.com/shidenggui/easytrader) 连接本地券商客户端下单：
+
+| 环境变量 | 说明 |
+|----------|------|
+| `TRADING_MODE=live` | 切换到实盘模式 |
+| `BROKER_ID=eastmoney` | 券商标识: `eastmoney`(东方财富) / `ths`(同花顺) / `htsec`(华泰XTP) |
+| `EASTMONEY_ACCOUNT` | 东方财富账号 |
+| `EASTMONEY_PASSWORD` | 东方财富密码 |
+
+**实盘交易前提条件：**
+1. 券商桌面客户端已安装、启动并登录
+2. `TRADING_MODE=live` 已设置
+3. 风控已确认（用户已设定资金金额）
+4. 建议先用 dry_run 模式验证策略
+
+```bash
+# 切换到实盘模式
+set TRADING_MODE=live
+set BROKER_ID=eastmoney
+
+# 或在聊天中告诉小土豆
+"切换到实盘模式"
+```
+
 ## 🛠️ 技术栈
 
 | 层 | 技术 |
@@ -183,7 +215,8 @@ python -m potato
 | 加密 | Fernet(AES-128-CBC+HMAC-SHA256) (cryptography) |
 | 通知 | Telegram / 飞书 / 钉钉 |
 | 桌面操控 | Bytebot Agent(内置) / Bytebot Desktop(Docker) / Playwright / pyautogui |
-| 交易引擎 | 7 阶段调度器 + 12 条风控规则 + 专业复盘系统 |
+| 交易引擎 | 7 阶段调度器 + 13 条风控规则 + 专业复盘系统 |
+| 券商接口 | easytrader (东方财富/同花顺/华泰XTP) + dry_run 模拟 |
 
 ## 📂 项目结构
 
@@ -206,7 +239,8 @@ a-stock-desktop-pet/
 │   ├── trading/
 │   │   ├── scheduler.py  # 7 阶段调度器
 │   │   ├── analyzer.py    # AI 选股引擎 + 技术指标
-│   │   ├── executor.py    # 交易执行器
+│   │   ├── executor.py    # 交易执行器 + 券商适配器
+│   │   ├── broker.py      # 券商适配层 (dry_run/Live)
 │   │   ├── journal.py     # 专业复盘系统
 │   │   └── risk.py        # 13 条风控规则（含止损门控）
 │   ├── intel.py           # 资讯抓取 (Google News RSS)
