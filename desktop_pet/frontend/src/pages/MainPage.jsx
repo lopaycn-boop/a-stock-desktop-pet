@@ -123,6 +123,10 @@ export default function MainPage() {
         setMessages(prev => [...prev, { type: 'assistant', content: maskSecrets(payload.text) }]);
         setChatOpen(true);
         break;
+      case 'chat':
+        setMessages(prev => [...prev, { type: 'assistant', content: maskSecrets(payload.text || payload.reply || '') }]);
+        setNeuroState('idle');
+        break;
       case 'canceled':
         break;
       case 'error':
@@ -133,6 +137,13 @@ export default function MainPage() {
       case 'vault_stored':
         setMessages(prev => [...prev, { type: 'system', content: `✅ ${payload.key} 已保存` }]);
         sendPacket({ type: 'vault_status', payload: {} });
+        break;
+      case 'vault_deleted':
+        setMessages(prev => [...prev, { type: 'system', content: `🗑️ ${payload.key || '密钥'} 已删除` }]);
+        sendPacket({ type: 'vault_status', payload: {} });
+        break;
+      case 'action_error':
+        setMessages(prev => [...prev, { type: 'system', content: `⚠️ ${maskSecrets(payload.error || payload.info || '操作失败')}` }]);
         break;
       case 'quota_exhausted': {
         const providers = payload.providers || [];
@@ -555,14 +566,6 @@ case 'billing_renewal_payment': {
         if (showRenewalPanel) {
           setShowRenewalPanel(false);
         }
-        break;
-      }
-      case 'billing_confirm_payment': {
-        const cp = payload || {};
-        const cpMsg = cp.auto_renewed
-          ? `✅ 付款确认，自动续费成功！余额: ¥${cp.wallet?.remaining_cny || '0'}`
-          : `💰 付款已记录！余额: ¥${cp.wallet?.remaining_cny || '0'}`;
-        setMessages(prev => [...prev, { type: 'system', content: cpMsg }]);
         break;
       }
       case 'credential_granted':
