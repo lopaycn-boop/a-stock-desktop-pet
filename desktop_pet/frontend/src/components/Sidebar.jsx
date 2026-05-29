@@ -3,6 +3,8 @@ import '../App.css';
 
 const QUICK_KEYS = [
   { key: 'DEEPSEEK_API_KEY', label: 'DeepSeek Key', emoji: '🧠' },
+  { key: 'EM_API_KEY', label: '东方财富 Key', emoji: '📊' },
+  { key: 'IWENCAI_API_KEY', label: '问财 Key', emoji: '🎯' },
   { key: 'SILICON_API_KEY', label: 'SiliconFlow Key', emoji: '🔊' },
   { key: 'TELEGRAM_BOT_TOKEN', label: 'Telegram Bot', emoji: '✈️' },
 ];
