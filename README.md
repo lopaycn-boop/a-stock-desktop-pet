@@ -16,12 +16,18 @@
 - 📊 **专业复盘** — 每日盘后深度复盘：胜率、盈亏比、最大回撤、逐笔对错、AI反思
 - 📰 **实时资讯** — Google News RSS 抓取A股资讯，AI关联分析个股
 - 🔄 **5层 LLM 故障转移** — DeepSeek → SiliconFlow → Liner → Base44 Agent → OpenAI，额度用完自动切换
+- 📊 **东方财富 AI SaaS** — 8大AI接口（金融问答/业绩点评/行业研究/跟踪报告/可比公司/热点发现/数据搜索/资讯搜索）+ 金融情感分析 + 异动监控 + 龙虎榜 + 筹码分布 + 实时行情
+- 🎯 **问财智能选股** — 自然语言选股/宏观分析/资讯搜索，API优先+免费网页回退
+- 🔬 **PlanExecute 多步分析** — Plan→Execute→Synthesize 三阶段深度分析引擎，质量更高
+- 🕹️ **Demo Mode** — 无API Key也能体验，6类智能模拟响应（行情/分析/热点/情绪/研报/闲聊）
 - 🖥️ **Bytebot 远程操控** — 内置Bytebot Agent(9991) + Bytebot Desktop(9990)，语音指令操控电脑
-- 🛡️ **严格风控系统** — 止损必设、用户定金额、AI定止损止盈、熔断机制、仓位管理（13条规则）
+- 🛡️ **严格风控系统** — 止损必设、用户定金额、AI定止损止盈、熔断机制、仓位管理（15条规则+AI确认门控）
 - 🔐 **密钥保险箱** — Fernet(AES-128-CBC+HMAC-SHA256) 加密存储，前端7层正则遮蔽，绝不泄漏密钥
+- 🔒 **AI确认门控** — 买入置信度<65%自动拦截，实盘切换需风控确认，低置信度只禁交易不禁分析
 - 💳 **统一计费** — 5家LLM服务商统一计费面板，用户只见总价格，2x加价模型对用户完全透明
 - 🔄 **一键续费** — 余额充足自动扣款，余额不足显示USDT-TRC20二维码+收款地址，扫码即付
 - 🔒 **源码保护** — AI不泄露源代码/架构/定价模型，输入拦截+输出脱敏+规则三重防护
+- 🌐 **浏览器域名白名单** — 仅允许16个金融域名，非白名单请求直接阻止
 - 🎙️ **语音交互** — SiliconFlow TTS/STT，支持语音对话
 - 📱 **多渠道通知** — Telegram / 飞书 / 钉钉推送交易提醒
 - 🧠 **30天记忆** — 持久化记忆系统，记住用户偏好和对话
@@ -41,7 +47,7 @@
 │  │         FastAPI 后端 (Python :8000)            │  │
 │  │  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │  │
 │  │  │ AI 服务   │ │ 交易引擎 │ │   风控系统      │ │  │
-│  │  │ 5层故障转移│ │ 7阶段调度 │ │ 13条规则       │ │  │
+│  │  │ 5层故障转移│ │ 7阶段调度 │ │ 15条规则       │ │  │
 │  │  └──────────┘ └──────────┘ └────────────────┘ │  │
 │  │  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │  │
 │  │  │密钥保险箱 │ │Bytebot   │ │   专业复盘      │ │  │
@@ -50,6 +56,10 @@
 │  │  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │  │
 │  │  │ 统一计费  │ │ 券商适配 │ │ 源码+密钥保护   │ │  │
 │  │  │ QR续费    │ │dry/live │ │ 3层防护         │ │  │
+│  │  └──────────┘ └──────────┘ └────────────────┘ │  │
+│  │  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │  │
+│  │  │ 东方财富  │ │ 问财选股 │ │  PlanExecute    │ │  │
+│  │  │ 8AI+情感  │ │ 自然语言 │ │  多步深度分析    │ │  │
 │  │  └──────────┘ └──────────┘ └────────────────┘ │  │
 │  └────────────────────────────────────────────────┘  │
 │         │ SQLite (本地) / CockroachDB (云端)         │
@@ -63,6 +73,9 @@
 1. 下载 `小土豆 AI操盘桌宠 Setup 1.0.0.exe`
 2. 双击安装，自动启动
 3. 启动后粘贴 DeepSeek API Key → 完成
+4. (可选) 粘贴东方财富/问财API Key 解锁更多数据源
+
+> 无Key时自动进入Demo模式，仍可体验6类智能模拟响应
 
 ### 方式二：开发者模式
 
@@ -106,12 +119,14 @@ python -m potato
 | 变量 | 说明 | 获取地址 |
 |------|------|----------|
 | `DEEPSEEK_API_KEY` | DeepSeek 大模型 (**推荐，必须**) | [platform.deepseek.com](https://platform.deepseek.com) |
+| `EM_API_KEY` | 东方财富 AI SaaS (可选) | [东方财富开放平台](https://open.eastmoney.com) |
+| `IWENCAI_API_KEY` | 问财智能选股 API (可选) | [问财](https://www.iwencai.com) |
 | `SILICON_API_KEY` | SiliconFlow (故障转移) | [cloud.siliconflow.cn](https://cloud.siliconflow.cn) |
 | `LINER_API_KEY` | Liner AI (故障转移) | [liner.ai](https://liner.ai) |
 | `OPENAI_API_KEY` | OpenAI (故障转移) | [platform.openai.com](https://platform.openai.com) |
 | `BASE44_API_KEY` | Base44 Agent (故障转移) | [app.base44.com](https://app.base44.com) |
 
-首次启动后，直接在聊天窗口粘贴 API Key 即可，小土豆会自动加密存储并刷新配置。
+> 东方财富和问财API为可选项。无Key时东方财富基础行情数据仍可用，问财会自动回退到免费网页版。**无任何Key时进入Demo模式**，提供智能模拟响应。
 
 ### 自主操盘规则
 
@@ -172,6 +187,8 @@ python -m potato
 | 10 | 交易时间 | 仅限 A股交易时间 |
 | 11 | 价格验证 | 下单前比对实时行情（偏差 > 3% 拦截） |
 | 12 | 异常波动 | 涨跌停板附近禁止交易 |
+| 13 | AI确认门控 | 买入置信度<65%自动拦截，实盘切换需风控确认 |
+| 14 | 浏览器白名单 | 仅允许16个金融域名，非白名单请求阻止 |
 
 ## 🎭 Live2D 模型
 
@@ -252,13 +269,15 @@ set BROKER_ID=eastmoney
 | 桌面壳 | Electron 28 |
 | 前端 | Vite + React + Live2D |
 | 后端 | Python + FastAPI + WebSocket |
-| 大模型 | DeepSeek / SiliconFlow / Liner / Base44 Agent / OpenAI (5层故障转移) |
+| 大模型 | DeepSeek / SiliconFlow / Liner / Base44 Agent / OpenAI (5层故障转移) + Demo Mode |
+| 数据源 | 东方财富AI SaaS (8API) + 问财智能选股 + 新浪财经实时行情 |
+| 分析引擎 | PlanExecute多步分析 + 6Agent博弈分析 + 金融情感分析 |
 | 数据库 | SQLite (本地) / CockroachDB (云端) |
 | 加密 | Fernet(AES-128-CBC+HMAC-SHA256) (cryptography) |
 | 计费 | 统一计费模块 (billing.py) + QR码续费 + 2x加价模型 |
 | 通知 | Telegram / 飞书 / 钉钉 |
 | 桌面操控 | Bytebot Agent(内置) / Bytebot Desktop(Docker) / Playwright / pyautogui |
-| 交易引擎 | 7 阶段调度器 + 13 条风控规则 + 专业复盘系统 |
+| 交易引擎 | 7 阶段调度器 + 15 条风控规则 + AI确认门控 + 专业复盘系统 |
 | 券商接口 | easytrader (东方财富/同花顺/华泰XTP) + dry_run 模拟 |
 
 ## 📂 项目结构
@@ -279,25 +298,51 @@ a-stock-desktop-pet/
 │           ├── pages/MainPage.jsx     # 主界面 + WS + 密钥遮蔽 + 计费面板
 │           └── components/
 │               ├── Live2D/            # Live2D 模型渲染 + 模型选择器
+│               ├── DataPanel.jsx      # 数据源面板(问财+PlanExecute+东方财富)
 │               ├── BillingPanel.jsx   # 计费面板模态框
-│               └── RenewalPanel.jsx   # 续费支付模态框(QR码+收款地址)
+│               ├── RenewalPanel.jsx   # 续费支付模态框(QR码+收款地址)
+│               └── Sidebar.jsx        # 侧边栏+密钥快速粘贴(5个Key)
 ├── potato/                # 核心引擎
 │   ├── trading/
 │   │   ├── scheduler.py  # 7 阶段调度器
-│   │   ├── analyzer.py    # AI 选股引擎 + 技术指标
+│   │   ├── analyzer.py    # AI 选股引擎 + 技术指标 + 东方财富数据注入
+│   │   ├── plan_execute.py # PlanExecute 多步深度分析引擎
 │   │   ├── executor.py    # 交易执行器 + 券商适配器
 │   │   ├── broker.py      # 券商适配层 (dry_run/Live)
 │   │   ├── journal.py     # 专业复盘系统
-│   │   └── risk.py        # 13 条风控规则（含止损门控）
+│   │   └── risk.py        # 15 条风控规则（含止损门控+AI确认门控）
 │   ├── billing.py         # 统一计费模块(2x加价+QR续费+钱包地址持久化)
+│   ├── eastmoney.py        # 东方财富 AI SaaS (8API+情感+异动+龙虎榜+筹码+行情)
+│   ├── iwencai.py          # 问财智能选股 (2API+网页回退+自然语言查询)
 │   ├── intel.py           # 资讯抓取 (Google News RSS)
-│   ├── llm.py             # 5 层 LLM 故障转移
+│   ├── llm.py             # 5 层 LLM 故障转移 + async + Demo Mode
 │   ├── vault.py            # Fernet(AES-128-CBC+HMAC-SHA256) 密钥保险箱
 │   └── ...
 ├── schema/                # 数据库 Schema
 ├── .env.example           # 环境变量模板
 ├── LICENSE                 # Apache-2.0
 └── README.md
+```
+
+## 🧪 测试
+
+```bash
+# 运行全部 181 个测试
+python -m pytest tests/ -v
+
+# 按模块运行
+python -m pytest tests/test_trading_loop.py -v   # 7阶段交易闭环 (18 tests)
+python -m pytest tests/test_demo_mode.py -v       # Demo模式 (15 tests)
+python -m pytest tests/test_eastmoney.py -v       # 东方财富 (12 tests)
+python -m pytest tests/test_iwencai.py -v         # 问财选股 (12 tests)
+python -m pytest tests/test_plan_execute.py -v    # PlanExecute (16 tests)
+python -m pytest tests/test_scheduler.py -v      # 调度器 (16 tests)
+python -m pytest tests/test_async_llm.py -v      # Async LLM (8 tests)
+python -m pytest tests/test_billing.py -v         # 计费 (25 tests)
+python -m pytest tests/test_risk.py -v            # 风控 (14 tests)
+python -m pytest tests/test_broker.py -v          # 券商 (21 tests)
+python -m pytest tests/test_vault.py -v           # 密钥保险箱 (4 tests)
+python -m pytest tests/test_e2e.py -v             # 端到端 (7 tests)
 ```
 
 ## 📄 License
