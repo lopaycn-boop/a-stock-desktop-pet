@@ -47,6 +47,7 @@ from potato.trading.scheduler import TradingScheduler
 from potato.trading.journal import TradeJournal
 from potato.trading.executor import TradeExecutor
 from potato.trading.analyzer import deep_analysis, fetch_realtime_quote, format_trade_decision_for_pet, format_trade_signal_message
+from potato.billing import BillingManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,6 +59,7 @@ logger = logging.getLogger("potato.pet")
 _startup_time = time.time()
 _trading_scheduler = None
 _broker_instance = None
+_billing = BillingManager()
 _spawned_tasks: set = set()
 
 
@@ -306,6 +308,12 @@ class PotatoPetBrain:
 - 用户可通过前端"🔀 模式"按钮切换
 - 用户可通过"💹 余额"查询账户余额和持仓
 
+计费模式：
+- 所有LLM调用按实际用量计费，另加100%平台服务费（2x费率）
+- 例：DeepSeek API实际消耗¥5 → 用户付费¥10（¥5 API + ¥5平台）
+- 用户可通过"💳 计费"查看各服务用量和费用明细
+- 用户可通过对话说"充值"或"看看账单"查看计费面板
+
 选股分析规则：
 - 每只股票必须给出技术面信号+基本面逻辑+消息面关联 三层理由
 - 必须给出止损价——不允许"看情况"
@@ -365,7 +373,9 @@ class PotatoPetBrain:
         "position_status": null,
         "review_history": null,
         "broker_switch": null,
-        "broker_balance": null
+        "broker_balance": null,
+        "billing_dashboard": null,
+        "billing_topup": null
     }}
 }}
 
@@ -703,6 +713,15 @@ async def websocket_endpoint(websocket: WebSocket):
             elif msg_type == "broker_balance":
                 await handle_broker_balance(send_to_frontend)
 
+            elif msg_type == "billing_dashboard":
+                await handle_billing_dashboard(send_to_frontend)
+
+            elif msg_type == "billing_topup":
+                await handle_billing_topup(payload, send_to_frontend)
+
+            elif msg_type == "billing_usage":
+                await handle_billing_usage(payload, send_to_frontend)
+
             else:
                 logger.warning("Unknown msg_type from frontend: %s", msg_type)
                 await send_to_frontend("error", {"info": f"未知消息类型: {msg_type}"})
@@ -903,6 +922,9 @@ _ACTION_LABELS = {
     "broker_status": "查询券商状态",
     "broker_switch": "切换交易模式",
     "broker_balance": "查询账户余额",
+    "billing_dashboard": "计费总览",
+    "billing_topup": "充值",
+    "billing_usage": "用量明细",
 }
 
 
@@ -1297,6 +1319,16 @@ async def _process_ai_actions(actions: dict, send_func):
         if actions.get("broker_balance"):
             await _emit_step(send_func, "broker_balance", "running", "查询账户余额")
             _spawn(handle_broker_balance(send_func))
+
+        if actions.get("billing_dashboard"):
+            await _emit_step(send_func, "billing_dashboard", "running", "加载计费面板")
+            _spawn(handle_billing_dashboard(send_func))
+
+        if actions.get("billing_topup"):
+            topup_amount = actions.get("billing_topup")
+            if isinstance(topup_amount, (int, float)) and topup_amount > 0:
+                await _emit_step(send_func, "billing_topup", "running", f"充值 ¥{topup_amount}")
+                _spawn(handle_billing_topup({"amount": float(topup_amount)}, send_func))
 
     except Exception as e:
         logger.warning("Action processing error: %s", e)
@@ -2606,6 +2638,77 @@ async def handle_broker_balance(send_func):
     except Exception as e:
         logger.error("broker_balance error: %s", e)
         await send_func("error", {"info": f"余额查询失败: {e}"})
+
+
+async def handle_billing_dashboard(send_func):
+    try:
+        dashboard = _billing.get_billing_dashboard()
+        await send_func("billing_dashboard", dashboard)
+        summary = dashboard.get("summary_text", "")
+        if summary:
+            await send_reply(summary, "neutral", send_func)
+    except Exception as e:
+        logger.error("billing_dashboard error: %s", e)
+        await send_func("error", {"info": f"计费面板加载失败: {e}"})
+
+
+async def handle_billing_topup(payload: dict, send_func):
+    try:
+        amount = float(payload.get("amount", 0))
+        method = str(payload.get("method", "manual"))
+        tx_hash = str(payload.get("tx_hash", ""))
+        description = str(payload.get("description", ""))
+
+        if amount <= 0:
+            await send_func("error", {"info": "充值金额必须大于0"})
+            return
+
+        result = _billing.add_wallet_topup(
+            amount_cny=amount,
+            method=method,
+            description=description,
+            tx_hash=tx_hash,
+        )
+        wallet = _billing.get_wallet_balance()
+        await send_func("billing_topup", {
+            "ok": True,
+            "amount_cny": amount,
+            "method": method,
+            "wallet": wallet,
+            "message": f"充值成功！¥{amount:.2f}已到账，余额¥{wallet['remaining_cny']:.2f}",
+        })
+        await send_reply(f"充值成功！¥{amount:.2f}已到账，当前余额¥{wallet['remaining_cny']:.2f} 🥔", "happy", send_func)
+    except Exception as e:
+        logger.error("billing_topup error: %s", e)
+        await send_func("error", {"info": f"充值失败: {e}"})
+
+
+async def handle_billing_usage(payload: dict, send_func):
+    try:
+        days = int(payload.get("days", 30)) if isinstance(payload, dict) else 30
+        usage = _billing.get_usage_summary(days=days)
+        await send_func("billing_usage", usage)
+
+        providers_text = []
+        for p in usage.get("providers", []):
+            prov_name = PROVIDER_PRICING.get(p["provider"], {}).get("name", p["provider"])
+            providers_text.append(f"  {prov_name}: 入{p['tokens_in']}出{p['tokens_out']} ¥{p['total_cny']:.2f}(含平台费¥{p['margin_cny']:.2f})")
+
+        summary = (
+            f"📊 近{days}天用量:\n"
+            f"  总输入: {usage['total_tokens_in']} tokens\n"
+            f"  总输出: {usage['total_tokens_out']} tokens\n"
+            f"  API成本: ¥{usage['total_cost_cny']:.2f}\n"
+            f"  平台费: ¥{usage['total_margin_cny']:.2f}\n"
+            f"  合计: ¥{usage['total_all_cny']:.2f}\n\n"
+        )
+        if providers_text:
+            summary += "各服务商:\n" + "\n".join(providers_text)
+
+        await send_reply(summary, "neutral", send_func)
+    except Exception as e:
+        logger.error("billing_usage error: %s", e)
+        await send_func("error", {"info": f"用量查询失败: {e}"})
 
 
 async def game_loop(ws, send_func):

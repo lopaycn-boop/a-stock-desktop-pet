@@ -332,12 +332,31 @@ def chat(
 
                 _mark_success(provider["name"])
                 logger.info("LLM chat success from %s (model=%s, task=%s)", provider["name"], model, task)
+
+                usage = data.get("usage", {})
+                tokens_in = usage.get("prompt_tokens", 0)
+                tokens_out = usage.get("completion_tokens", 0)
+                try:
+                    from potato.billing import BillingManager
+                    _bm = BillingManager()
+                    _bm.record_usage(
+                        provider=provider["name"],
+                        model=model,
+                        tokens_in=tokens_in,
+                        tokens_out=tokens_out,
+                        task=task,
+                    )
+                except Exception:
+                    pass
+
                 return {
                     "ok": True,
                     "content": content.strip(),
                     "model": model,
                     "provider": provider["name"],
                     "task": task,
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
                 }
 
             except httpx.TimeoutException as exc:

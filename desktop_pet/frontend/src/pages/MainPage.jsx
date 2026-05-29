@@ -77,6 +77,7 @@ const QUICK_ACTIONS = [
   { label: '💰 持仓', msg: '帮我看看持仓情况' },
   { label: '💹 余额', msg: '__broker_balance__' },
   { label: '🔀 模式', msg: '__broker_switch__' },
+  { label: '💳 计费', msg: '__billing_dashboard__' },
   { label: '🧠 记忆', msg: '__memory__' },
   { label: '🔑 密钥', msg: '__vault__' },
 ];
@@ -499,6 +500,22 @@ export default function MainPage() {
         setMessages(prev => [...prev, { type: 'system', content: bb.summary || '余额查询完成' }]);
         break;
       }
+      case 'billing_dashboard': {
+        const bd = payload || {};
+        setMessages(prev => [...prev, { type: 'system', content: bd.summary_text || '计费面板加载完成' }]);
+        break;
+      }
+      case 'billing_topup': {
+        const bt = payload || {};
+        setMessages(prev => [...prev, { type: 'system', content: bt.message || '充值完成' }]);
+        break;
+      }
+      case 'billing_usage': {
+        const bu = payload || {};
+        const buProvs = (bu.providers || []).map(p => `  ${p.provider}: ¥${p.total_cny}`).join('\n');
+        setMessages(prev => [...prev, { type: 'system', content: `📊 近${bu.period_days || 30}天用量: 总¥${bu.total_all_cny || 0}\n${buProvs}` }]);
+        break;
+      }
       case 'credential_granted':
       case 'credential_revoked':
       case 'credential_status': {
@@ -675,6 +692,11 @@ export default function MainPage() {
     }
     if (action.msg === '__broker_balance__') {
       sendPacket({ type: 'broker_balance', payload: {} });
+      setChatOpen(true);
+      return;
+    }
+    if (action.msg === '__billing_dashboard__') {
+      sendPacket({ type: 'billing_dashboard', payload: {} });
       setChatOpen(true);
       return;
     }
