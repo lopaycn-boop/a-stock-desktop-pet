@@ -155,7 +155,7 @@ export default function MainPage() {
         sendPacket({ type: 'vault_status', payload: {} });
         break;
       case 'action_error':
-        setMessages(prev => [...prev, { type: 'system', content: `⚠️ ${maskSecrets(payload.error || payload.info || '操作失败')}` }]);
+        setMessages(prev => [...prev, { type: 'system', content: `⚠️ ${maskSecrets(payload.error || payload.detail || payload.info || '操作失败')}` }]);
         break;
       case 'quota_exhausted': {
         const providers = payload.providers || [];
@@ -668,11 +668,9 @@ case 'billing_renewal_payment': {
         }
         break;
       }
-      case 'em_financial_qa':
       case 'em_earnings_review':
       case 'em_industry_research':
       case 'em_tracking_report':
-      case 'em_hotspot_discovery':
       case 'em_comparable_company': {
         const emContent = payload?.content || payload?.answer || '暂无数据';
         setMessages(prev => [...prev, { type: 'system', content: `📊 ${emContent}` }]);
@@ -710,11 +708,13 @@ case 'billing_renewal_payment': {
         }
         break;
       }
+      case 'em_financial_qa':
       case 'em_query': {
         const answer = payload?.content || payload?.answer || '暂无回答';
         setMessages(prev => [...prev, { type: 'system', content: `🤖 ${answer}` }]);
         break;
       }
+      case 'em_hotspot_discovery':
       case 'em_hotspot': {
         const hotspotData = payload?.content || payload?.data || '暂无热点数据';
         setMessages(prev => [...prev, { type: 'system', content: `🔥 热点板块: ${typeof hotspotData === 'string' ? hotspotData.substring(0, 200) : '已获取'}` }]);
@@ -742,11 +742,20 @@ case 'billing_renewal_payment': {
     : 'ws://127.0.0.1:8000/ws';
   const { sendPacket, connected } = useNeuroSocket(WS_URL, handleServerPacket);
 
+  const prevConnectedRef = useRef(connected);
   useEffect(() => {
     if (connected) {
+      if (prevConnectedRef.current === false) {
+        setMessages(prev => [...prev, { type: 'system', content: '✅ 连接已恢复' }]);
+      }
       sendPacket({ type: 'vault_status', payload: {} });
       fetch(`http://${window.location.hostname}:8000/health`).then(r => r.json()).then(setSystemStatus).catch(() => {});
+    } else {
+      if (prevConnectedRef.current === true) {
+        setMessages(prev => [...prev, { type: 'system', content: '⚠️ 与服务器断开连接，正在重连...' }]);
+      }
     }
+    prevConnectedRef.current = connected;
   }, [connected]);
 
   useEffect(() => {
@@ -983,6 +992,7 @@ case 'billing_renewal_payment': {
             <span className="state">{stateLabel}</span>
             {systemStatus && (
               <span style={{ fontSize: 10, opacity: 0.5, marginLeft: 4 }}>
+                {connected ? '' : '⚠️断开'}
                 {systemStatus.data_sources?.demo_mode ? '📋demo' :
                  systemStatus.data_sources?.active_providers > 0 ?
                  `🟢${systemStatus.data_sources.active_providers}key` : '🔴0key'}
