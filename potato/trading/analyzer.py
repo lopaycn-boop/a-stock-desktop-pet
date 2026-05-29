@@ -29,7 +29,7 @@ from typing import Any
 import httpx
 
 from potato.config import load_settings
-from potato.llm import chat, research, analyze
+from potato.llm import chat, research, analyze, achat, aresearch, aanalyze
 from potato.eastmoney import (
     EastMoneyClient,
     analyze_sentiment,
@@ -513,8 +513,7 @@ async def deep_analysis(
 9. 保守策略下单笔不超过总资产30%
 10. 不编造未在数据/新闻中出现的事实"""
 
-    result = await asyncio.to_thread(
-        chat,
+    result = await achat(
         prompt,
         system="你是专业量化操盘手「小土豆」，保守纪律优先，用中文输出。每只股票必须给出清晰的选股理由和退出策略。",
         settings=settings,
