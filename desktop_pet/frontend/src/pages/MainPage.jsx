@@ -4,6 +4,7 @@ import LoadingDots from '../components/LoadingDots';
 import ModelPicker from '../components/ModelPicker';
 import BillingPanel from '../components/BillingPanel';
 import RenewalPanel from '../components/RenewalPanel';
+import DataPanel from '../components/DataPanel';
 import '../App.css';
 
 import { useAudioQueue } from '../hooks/useAudioQueue';
@@ -83,6 +84,7 @@ const QUICK_ACTIONS = [
   { label: '🔄 续费', msg: '__billing_renewal_payment__' },
   { label: '🧠 记忆', msg: '__memory__' },
   { label: '🔑 密钥', msg: '__vault__' },
+  { label: '📡 数据', msg: '__data_panel__' },
 ];
 
 export default function MainPage() {
@@ -100,6 +102,7 @@ export default function MainPage() {
   const [renewalPanelData, setRenewalPanelData] = useState(null);
   const [showBillingPanel, setShowBillingPanel] = useState(false);
   const [showRenewalPanel, setShowRenewalPanel] = useState(false);
+  const [showDataPanel, setShowDataPanel] = useState(false);
   const messagesEndRef = useRef(null);
   const live2dRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -869,6 +872,10 @@ case 'billing_renewal_payment': {
       setChatOpen(true);
       return;
     }
+    if (action.msg === '__data_panel__') {
+      setShowDataPanel(true);
+      return;
+    }
     if (action.msg === '__bytebot__') {
       sendPacket({ type: 'bytebot_status', payload: {} });
       setChatOpen(true);
@@ -1080,6 +1087,18 @@ case 'billing_renewal_payment': {
         onClose={() => setShowRenewalPanel(false)}
         onConfirmPayment={() => { sendPacket({ type: 'billing_confirm_payment', payload: { amount: renewalPanelData?.total_renewal_cny || 0 } }); }}
       />}
+      {showDataPanel && (
+        <div className="sidebar-overlay" onClick={() => setShowDataPanel(false)} />
+      )}
+      {showDataPanel && (
+        <div className="sidebar open" style={{ right: 'auto', left: 0, width: 320 }}>
+          <div className="sidebar-header">
+            <span style={{ fontSize: 15, fontWeight: 700 }}>📡 数据源</span>
+            <button className="sidebar-close-btn" onClick={() => setShowDataPanel(false)}>&#215;</button>
+          </div>
+          <DataPanel sendPacket={sendPacket} messages={messages} />
+        </div>
+      )}
     </div>
   );
 }
