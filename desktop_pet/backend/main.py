@@ -1735,9 +1735,11 @@ async def handle_cleanup_pc(payload: dict, send_func):
     import subprocess
     import asyncio as _asyncio
     import re as _re
-    _SAFE_DIR_RE = _re.compile(r'^[A-Za-z]:\\[^\x00-\x1f;|`$(){}!<>"\']*\\$')
+    _SAFE_DIR_RE = _re.compile(r'^[A-Za-z]:\\[A-Za-z0-9_\\.\\ -]+\\?$')
     _PROTECTED_DIRS = ("\\windows\\system32", "\\program files", "\\program files (x86)",
-                       "\\users\\all users", "\\desktop", "\\documents", "\\pictures")
+                       "\\users\\all users", "\\desktop", "\\documents", "\\pictures",
+                       "\\programdata", "\\windows\\syswow64")
+    _MAX_CLEANUP_BYTES = 5 * 1024 * 1024 * 1024  # 5GB safety cap per dir
 
     for dir_pattern, label in targets:
         try:
@@ -1791,6 +1793,10 @@ async def handle_cleanup_pc(payload: dict, send_func):
                     file_count = int(float(parts[1])) if parts[1].strip() else 0
             except (ValueError, IndexError):
                 pass
+
+            if size_bytes > _MAX_CLEANUP_BYTES:
+                details.append(f"{label}: 目录过大({round(size_bytes/1024/1024/1024, 1)}GB)，跳过安全限制")
+                continue
 
             if file_count == 0 and size_bytes == 0:
                 details.append(f"{label}: 已是干净")
