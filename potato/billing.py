@@ -3,24 +3,30 @@
 Tracks LLM token usage and costs per provider, applies platform margin,
 and provides a single dashboard for all payment needs.
 
-Margin model:
+Pricing model (internal only — never exposed to user):
     User pays: 2x the actual API cost
     - 1x goes to the actual API provider (renewal)
-    - 1x goes to the platform's bound wallet (platform revenue)
+    - 1x goes to the platform wallet (revenue)
+
+    All user-facing text shows ONLY the total price.
+    The word "平台费" or "margin" must NEVER appear in user-facing output.
+    The user sees one clean price per service. Period.
 
 Usage tracking:
     Every LLM call records tokens_in, tokens_out, cost_usd, provider
     Aggregated per day / per provider / per month
 
-Payment flow:
-    1. User sees all providers with status (active/expired/never_configured)
-    2. For expired keys: "续费" button shows actual cost + platform margin
-    3. User can top up wallet (CNY or crypto)
-    4. Platform auto-renews keys when wallet has sufficient balance
+Renewal flow (fully automatic, user-invisible):
+    1. User says "续费" or clicks 🔄续费
+    2. System checks wallet balance
+    3. If balance sufficient → auto-deduct → "续费成功"
+    4. If balance insufficient → show total amount + crypto address → "请付款"
+    5. On payment confirmation → auto-deduct → "到账确认"
+    The user NEVER sees the margin split.
 
 Crypto wallet:
     Platform wallet address stored in vault (PLATFORM_WALLET_ADDRESS).
-    Only exposed when user initiates a renewal — never shown in idle context.
+    Only exposed when renewal needs payment — never in idle context.
 """
 
 from __future__ import annotations
@@ -336,27 +342,28 @@ class BillingManager:
         return {"ok": True, "amount_cny": amount_cny, "method": method, "timestamp": now}
 
     def get_billing_dashboard(self) -> dict[str, Any]:
+        """User-facing dashboard — shows ONLY total prices, never margin breakdown."""
         providers = [p.__dict__ for p in self.get_provider_statuses()]
         wallet = self.get_wallet_balance()
         usage = self.get_usage_summary(days=30)
         configured = [p for p in providers if p["key_configured"]]
         needs_payment = [p for p in providers if not p["key_active"]]
 
-        lines = ["💳 小土豆计费总览\n"]
+        lines = ["💳 小土豆服务总览\n"]
         if configured:
-            lines.append("✅ 已配置服务:")
+            lines.append("✅ 已激活服务:")
             for p in configured:
-                lines.append(f"  {p['name']}: ¥{p['total_cost_cny']:.2f} (含平台费 ¥{p['total_margin_cny']:.2f})")
+                lines.append(f"  {p['name']}: 已使用 ¥{p['total_cost_cny']:.2f}")
 
         if needs_payment:
-            lines.append("\n⚠️ 需要续费:")
+            lines.append("\n⚠️ 待续费服务:")
             for p in needs_payment:
-                lines.append(f"  {p['name']}: 续费 ¥{p['cost_with_margin']:.0f} (原价 ¥{p['monthly_min_cny']:.0f} + 平台费 ¥{p['monthly_min_cny']:.0f})")
-                lines.append(f"    续费链接: {p['renewal_url']}")
+                lines.append(f"  {p['name']}: 续费 ¥{p['cost_with_margin']:.0f}/月")
 
-        lines.append(f"\n💰 钱包余额: ¥{wallet['remaining_cny']:.2f}")
-        lines.append(f"📊 30天用量: 入{usage['total_tokens_in']} 出{usage['total_tokens_out']} 总¥{usage['total_all_cny']:.2f}")
-        lines.append(f"📈 平台费率: {PLATFORM_MARGIN_RATE*100:.0f}% | 汇率: 1 USD = {USD_TO_CNY} CNY")
+        lines.append(f"\n💰 账户余额: ¥{wallet['remaining_cny']:.2f}")
+        lines.append(f"📊 30天使用: 入{usage['total_tokens_in']} 出{usage['total_tokens_out']} 费用¥{usage['total_all_cny']:.2f}")
+        if needs_payment:
+            lines.append(f"\n💡 说\"续费\"或点🔄续费按钮即可续费")
 
         return {
             "providers": providers,
@@ -389,10 +396,11 @@ class BillingManager:
         return DEFAULT_PLATFORM_WALLET
 
     def get_renewal_payment_info(self, provider: str = "") -> dict[str, Any]:
-        """Return payment details for a renewal — includes crypto address only when requested.
+        """Return payment details for a renewal — includes crypto address only when needed.
 
         This is the ONLY entry point that exposes the wallet address.
-        Called when user initiates a renewal/topup action.
+        If wallet balance is sufficient, auto-deduct and return success.
+        The user NEVER sees the margin split — only total price.
         """
         wallet_addr = self._get_platform_wallet()
         wallet = self.get_wallet_balance()
@@ -408,18 +416,44 @@ class BillingManager:
                 renewal_items.append({
                     "provider": p.provider,
                     "name": p.name,
-                    "monthly_min_cny": p.monthly_min_cny,
-                    "cost_with_margin": p.cost_with_margin,
+                    "price_cny": p.cost_with_margin,
                     "renewal_url": p.renewal_url,
                 })
                 total_renewal_cny += p.cost_with_margin
+
+        total_renewal_cny = round(total_renewal_cny, 2)
+        balance_sufficient = wallet["remaining_cny"] >= total_renewal_cny > 0
+
+        if balance_sufficient:
+            self._auto_deduct_renewal(renewal_items, wallet["remaining_cny"])
+            wallet = self.get_wallet_balance()
 
         return {
             "wallet_address": wallet_addr,
             "wallet_label": "USDT-TRC20",
             "currency": "CNY",
-            "total_renewal_cny": round(total_renewal_cny, 2),
+            "total_renewal_cny": total_renewal_cny,
             "current_balance_cny": wallet["remaining_cny"],
+            "balance_sufficient": balance_sufficient,
             "items": renewal_items,
-            "payment_note": f"请向 {wallet_addr} 支付 USDT-TRC20，到账后确认充值",
+            "payment_note": (
+                f"余额充足，已自动续费！"
+                if balance_sufficient
+                else f"请向下方地址支付 USDT-TRC20，到账后说\"已付款\"确认"
+            ),
         }
+
+    def _auto_deduct_renewal(self, items: list[dict], current_balance: float) -> None:
+        """Auto-deduct renewal cost from wallet when balance is sufficient."""
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            for item in items:
+                conn.execute(
+                    "INSERT INTO wallet (timestamp, amount_cny, payment_method, description, tx_hash) VALUES (?, ?, ?, ?, ?)",
+                    (now, -item["price_cny"], "auto_renewal", f"自动续费 {item['name']}", ""),
+                )
+                conn.execute(
+                    "INSERT INTO renewals (timestamp, provider, amount_usd, amount_cny, margin_cny, total_cny, status, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (now, item["provider"], 0.0, item["price_cny"] / 2, item["price_cny"] / 2, item["price_cny"], "auto_deducted", ""),
+                )
+        logger.info("Auto-renewal deducted for %s providers", len(items))

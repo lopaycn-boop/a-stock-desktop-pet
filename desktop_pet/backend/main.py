@@ -309,12 +309,13 @@ class PotatoPetBrain:
 - 用户可通过"💹 余额"查询账户余额和持仓
 
 计费模式：
-- 所有LLM调用按实际用量计费，另加100%平台服务费（2x费率）
-- 例：DeepSeek API实际消耗¥5 → 用户付费¥10（¥5 API + ¥5平台）
-- 用户可通过"💳 计费"查看各服务用量和费用明细
-- 用户可通过对话说"充值"或"看看账单"查看计费面板
-- 用户说"续费"或"支付"时 → 触发billing_renewal_payment，返回平台数字币收款地址
-- 收款地址仅在续费时显示，不在普通聊天中暴露
+- 所有LLM调用按用量计费，用户只看总费用
+- 用户可通过"💳 计费"查看各服务用量和费用
+- 用户可通过对话说"充值"或"看看账单"查看信息
+- 用户说"续费"或"支付"时 → 触发billing_renewal_payment
+  - 余额充足 → 自动扣款，显示"续费成功"
+  - 余额不足 → 显示收款地址和总金额，引导付款
+- 严禁在回复中暴露成本拆分、利润比例、费率结构等信息
 
 选股分析规则：
 - 每只股票必须给出技术面信号+基本面逻辑+消息面关联 三层理由
@@ -2703,15 +2704,13 @@ async def handle_billing_usage(payload: dict, send_func):
         providers_text = []
         for p in usage.get("providers", []):
             prov_name = PROVIDER_PRICING.get(p["provider"], {}).get("name", p["provider"])
-            providers_text.append(f"  {prov_name}: 入{p['tokens_in']}出{p['tokens_out']} ¥{p['total_cny']:.2f}(含平台费¥{p['margin_cny']:.2f})")
+            providers_text.append(f"  {prov_name}: 入{p['tokens_in']}出{p['tokens_out']} ¥{p['total_cny']:.2f}")
 
         summary = (
-            f"📊 近{days}天用量:\n"
+            f"📊 近{days}天使用:\n"
             f"  总输入: {usage['total_tokens_in']} tokens\n"
             f"  总输出: {usage['total_tokens_out']} tokens\n"
-            f"  API成本: ¥{usage['total_cost_cny']:.2f}\n"
-            f"  平台费: ¥{usage['total_margin_cny']:.2f}\n"
-            f"  合计: ¥{usage['total_all_cny']:.2f}\n\n"
+            f"  费用合计: ¥{usage['total_all_cny']:.2f}\n\n"
         )
         if providers_text:
             summary += "各服务商:\n" + "\n".join(providers_text)
@@ -2723,7 +2722,7 @@ async def handle_billing_usage(payload: dict, send_func):
 
 
 async def handle_billing_renewal_payment(payload: dict, send_func):
-    """Show crypto wallet address ONLY when user initiates a renewal."""
+    """Handle renewal — auto-deduct if balance sufficient, otherwise show payment address."""
     try:
         provider = ""
         if isinstance(payload, dict):
@@ -2731,25 +2730,22 @@ async def handle_billing_renewal_payment(payload: dict, send_func):
 
         payment_info = _billing.get_renewal_payment_info(provider=provider)
 
-        items_text = []
-        for item in payment_info["items"]:
-            items_text.append(
-                f"  {item['name']}: ¥{item['cost_with_margin']:.0f} (原价¥{item['monthly_min_cny']:.0f}+平台费¥{item['monthly_min_cny']:.0f})"
-            )
+        if payment_info.get("balance_sufficient"):
+            summary = f"✅ 续费成功！已自动从余额扣款。\n当前余额: ¥{payment_info['current_balance_cny']:.2f}"
+        else:
+            items_text = []
+            for item in payment_info["items"]:
+                items_text.append(f"  {item['name']}: ¥{item['price_cny']:.0f}/月")
 
-        summary = (
-            f"💳 续费支付信息\n\n"
-            f"收款地址: {payment_info['wallet_address']}\n"
-            f"币种: {payment_info['wallet_label']}\n\n"
-            f"当前余额: ¥{payment_info['current_balance_cny']:.2f}\n"
-        )
-        if items_text:
-            summary += f"待续费服务:\n" + "\n".join(items_text) + "\n"
-            summary += f"\n合计续费: ¥{payment_info['total_renewal_cny']:.2f}\n"
-        summary += f"\n{payment_info['payment_note']}"
+            summary = f"💳 续费支付\n\n收款地址: {payment_info['wallet_address']}\n币种: {payment_info['wallet_label']}\n\n"
+            if items_text:
+                summary += "待续费服务:\n" + "\n".join(items_text) + "\n"
+                summary += f"\n合计: ¥{payment_info['total_renewal_cny']:.2f}\n"
+            summary += f"\n当前余额: ¥{payment_info['current_balance_cny']:.2f}\n"
+            summary += payment_info["payment_note"]
 
         await send_func("billing_renewal_payment", payment_info)
-        await send_reply(summary, "happy", send_func)
+        await send_reply(summary, "happy" if payment_info.get("balance_sufficient") else "neutral", send_func)
     except Exception as e:
         logger.error("billing_renewal_payment error: %s", e)
         await send_func("error", {"info": f"续费信息获取失败: {e}"})

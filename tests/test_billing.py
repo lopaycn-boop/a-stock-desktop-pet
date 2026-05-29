@@ -1,4 +1,4 @@
-"""Billing module tests — usage tracking, cost calculation, provider status."""
+"""Billing module tests — usage tracking, cost calculation, provider status, renewal."""
 
 import sys
 from pathlib import Path
@@ -114,7 +114,7 @@ def test_wallet_balance(billing):
     assert wallet["currency"] == "CNY"
 
 
-def test_billing_dashboard(billing):
+def test_billing_dashboard_no_margin_exposure(billing):
     billing.record_usage("deepseek", "deepseek-chat", 1000, 500, "chat")
     dashboard = billing.get_billing_dashboard()
     assert "providers" in dashboard
@@ -122,7 +122,18 @@ def test_billing_dashboard(billing):
     assert "usage_30d" in dashboard
     assert "summary_text" in dashboard
     assert dashboard["configured_count"] >= 0
-    assert "30天用量" in dashboard["summary_text"]
+    text = dashboard["summary_text"]
+    assert "平台费" not in text
+    assert "2x" not in text
+    assert "费率" not in text
+    assert "原价" not in text
+    assert "margin" not in text.lower()
+
+
+def test_billing_dashboard_shows_total_price(billing):
+    dashboard = billing.get_billing_dashboard()
+    text = dashboard["summary_text"]
+    assert "¥" in text or "余额" in text or "使用" in text
 
 
 def test_usage_summary_empty():
@@ -156,7 +167,7 @@ def test_get_platform_wallet_default():
     assert addr.startswith("T")
 
 
-def test_get_renewal_payment_info():
+def test_get_renewal_payment_info_no_margin_exposure():
     manager = BillingManager()
     info = manager.get_renewal_payment_info()
     assert "wallet_address" in info
@@ -164,9 +175,15 @@ def test_get_renewal_payment_info():
     assert "currency" in info
     assert "items" in info
     assert "payment_note" in info
+    assert "balance_sufficient" in info
     assert info["wallet_address"] == DEFAULT_PLATFORM_WALLET
     assert info["wallet_label"] == "USDT-TRC20"
     assert isinstance(info["items"], list)
+    for item in info["items"]:
+        assert "price_cny" in item
+        assert "name" in item
+        assert "monthly_min_cny" not in item
+        assert "cost_with_margin" not in item
 
 
 def test_get_renewal_payment_info_with_provider():
@@ -175,6 +192,17 @@ def test_get_renewal_payment_info_with_provider():
     assert info["wallet_address"] == DEFAULT_PLATFORM_WALLET
     for item in info["items"]:
         assert item["provider"] == "deepseek"
+
+
+def test_renewal_auto_deduct_when_balance_sufficient():
+    manager = BillingManager()
+    manager.add_wallet_topup(amount_cny=500.0, method="test")
+    wallet_before = manager.get_wallet_balance()
+    info = manager.get_renewal_payment_info()
+    if info["items"] and info["total_renewal_cny"] > 0:
+        if info["balance_sufficient"]:
+            wallet_after = manager.get_wallet_balance()
+            assert wallet_after["remaining_cny"] < wallet_before["remaining_cny"]
 
 
 def test_wallet_config_table_created():

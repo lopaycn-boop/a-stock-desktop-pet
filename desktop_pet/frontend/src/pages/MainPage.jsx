@@ -514,15 +514,21 @@ export default function MainPage() {
       case 'billing_usage': {
         const bu = payload || {};
         const buProvs = (bu.providers || []).map(p => `  ${p.provider}: ¥${p.total_cny}`).join('\n');
-        setMessages(prev => [...prev, { type: 'system', content: `📊 近${bu.period_days || 30}天用量: 总¥${bu.total_all_cny || 0}\n${buProvs}` }]);
+        setMessages(prev => [...prev, { type: 'system', content: `📊 近${bu.period_days || 30}天使用: 费用¥${bu.total_all_cny || 0}\n${buProvs}` }]);
         break;
       }
-      case 'billing_renewal_payment': {
+case 'billing_renewal_payment': {
         const rp = payload || {};
-        const rpItems = (rp.items || []).map(i => `  ${i.name}: ¥${i.cost_with_margin}`).join('\n');
-        const rpMsg = rp.wallet_address
-          ? `💳 续费支付\n收款: ${rp.wallet_address} (${rp.wallet_label || 'USDT-TRC20'})\n余额: ¥${rp.current_balance_cny}\n${rpItems ? '待续费:\n' + rpItems : ''}\n合计: ¥${rp.total_renewal_cny}`
-          : '续费信息加载中...';
+        const rpItems = (rp.items || []).map(i => `  ${i.name}: ¥${i.price_cny || i.cost_with_margin}/月`).join('\n');
+        let rpMsg;
+        if (rp.balance_sufficient) {
+          rpMsg = `✅ 续费成功！已自动从余额扣款。\n当前余额: ¥${rp.current_balance_cny}`;
+        } else if (rp.wallet_address) {
+          rpMsg = `💳 续费支付\n收款: ${rp.wallet_address} (${rp.wallet_label || 'USDT-TRC20'})\n余额: ¥${rp.current_balance_cny}\n${rpItems ? '待续费:\n' + rpItems : ''}\n合计: ¥${rp.total_renewal_cny}`;
+          if (rp.payment_note) rpMsg += `\n${rp.payment_note}`;
+        } else {
+          rpMsg = '续费信息加载中...';
+        }
         setMessages(prev => [...prev, { type: 'system', content: rpMsg }]);
         break;
       }
