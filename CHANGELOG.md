@@ -2,6 +2,33 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.0.1] - 2025-05-30
+
+### Security Fixes
+- **Critical**: Fix source code disclosure blocklist bypass — blocked messages were still dispatched to AI (added `_blocked` flag)
+- **Critical**: Fix `active_websockets` NameError causing backend crash on every graceful shutdown
+- **High**: Add try/except to crash-prone WS handlers: `trade_auto_start/stop/status`, `voice_call_end`, `handle_set_voice`, `handle_list_voices`
+- **High**: Fix XSS via `window.open()` on unvalidated `data:` URIs — removed `window.open()` on image click
+- **High**: Validate `payload.image` prefix (must start with `data:image/` or `/9j/`)
+- **Medium**: Cap user input at 10,000 chars, EM/IWencai queries at 1,000 chars, audio at 5MB
+- **Medium**: Cap billing topup at 100,000 CNY, require explicit amount for confirm_payment (removed 72.5 CNY default)
+- **Medium**: Whitelist `bytebot_desktop` params to prevent arbitrary kwargs injection
+- **Medium**: Validate vault key names for path traversal characters (`/`, `\\`, `..`)
+- **Low**: Replace multiple `str(e)` with `_safe_error(e)` to prevent internal info leaks
+
+### Bug Fixes
+- Fix frontend WS event type mismatch: `em_query` → added `em_financial_qa` case, `em_hotspot` → added `em_hotspot_discovery` case
+- Remove ~500 chars of duplicated rules 28-40 in system prompt (saves LLM tokens)
+- Add `active_websockets` tracking: append on accept, remove on disconnect/error
+- Add WS disconnect/reconnect messages in chat UI
+- Show `⚠️断开` status indicator in title bar when WS disconnected
+
+### Features
+- Add `/verify` HTTP endpoint for startup health checks
+- Add `python -m potato.verify` CLI verification (checks all 17 modules, vault keys, demo mode)
+- Add startup verification in Electron main.js (calls `/verify` after backend health check)
+- Create CHANGELOG.md
+
 ## [1.0.0] - 2025-05-30
 
 ### Core Features

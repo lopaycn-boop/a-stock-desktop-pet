@@ -690,6 +690,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "audio_input":
                 audio_b64 = payload.get("audio_base64", "")
+                if len(audio_b64) > 5_000_000:
+                    await send_to_frontend("error", {"info": "语音文件过大，请缩短录音"})
+                    continue
                 logger.info("收到语音输入, 长度=%d", len(audio_b64) if audio_b64 else 0)
                 text = await AIService.speech_to_text(audio_b64)
                 logger.info("语音识别结果: %s", repr(text) if text else "(空)")
@@ -1145,6 +1148,7 @@ async def _process_ai_actions(actions: dict, send_func):
     _ALLOWED_PLATFORMS = {"eastmoney", "tonghuashun", "xueqiu", "ths", "em"}
     _ALLOWED_RISK_LEVELS = {"conservative", "moderate", "aggressive"}
     _DANGEROUS_BYTEBOT_ACTIONS = {"write_file", "read_file", "press_keys"}
+    _ALLOWED_BYTEBOT_DESKTOP_PARAMS = {"action", "text", "path", "x", "y", "dx", "dy", "button", "keys", "key", "duration", "name", "wait"}
     _MAX_TASK_DESC_LEN = 500
     _MAX_BYTEBOT_TEXT_LEN = 1000
 
@@ -1471,7 +1475,7 @@ async def _process_ai_actions(actions: dict, send_func):
                 else:
                     cleaned = {"action": action}
                     for k, v in desktop_cmd.items():
-                        if k == "action" or v is None:
+                        if k == "action" or v is None or k not in _ALLOWED_BYTEBOT_DESKTOP_PARAMS:
                             continue
                         if isinstance(v, str) and len(v) > _MAX_BYTEBOT_TEXT_LEN:
                             v = v[:_MAX_BYTEBOT_TEXT_LEN]
@@ -2368,6 +2372,9 @@ async def handle_voice_call_audio(payload: dict, send_func):
     audio_b64 = payload.get("audio_base64", "")
     if not audio_b64:
         return
+    if len(audio_b64) > 5_000_000:
+        await send_func("error", {"info": "语音文件过大，请缩短录音"})
+        return
 
     brain.state = "thinking"
     await send_func("state_update", {"state": "thinking"})
@@ -2578,6 +2585,7 @@ async def handle_bytebot_desktop(payload: dict, send_func):
                                "paste_text", "scroll", "move_mouse", "application", "wait"}
     _DANGEROUS_DESKTOP_ACTIONS = {"write_file", "read_file", "press_keys"}
     _MAX_PARAM_LEN = 1000
+    _ALLOWED_DESKTOP_PARAMS = {"action", "text", "path", "x", "y", "dx", "dy", "button", "keys", "key", "duration", "name", "wait"}
 
     action = str(payload.get("action", "")).strip()
     if not action:
@@ -2606,7 +2614,7 @@ async def handle_bytebot_desktop(payload: dict, send_func):
 
         params = {}
         for k, v in payload.items():
-            if k == "action" or v is None:
+            if k == "action" or v is None or k not in _ALLOWED_DESKTOP_PARAMS:
                 continue
             if isinstance(v, str) and len(v) > _MAX_PARAM_LEN:
                 v = v[:_MAX_PARAM_LEN]
@@ -3141,7 +3149,8 @@ async def handle_billing_confirm_payment(payload: dict, send_func):
         method = "crypto" if tx_hash else "manual"
 
         if amount <= 0:
-            amount = 72.5
+            await send_func("error", {"info": "请指定充值金额"})
+            return
 
         result = _billing.add_wallet_topup(amount_cny=amount, method=method, tx_hash=tx_hash)
         wallet = _billing.get_wallet_balance()
