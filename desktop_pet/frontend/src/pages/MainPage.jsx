@@ -78,6 +78,7 @@ const QUICK_ACTIONS = [
   { label: '💹 余额', msg: '__broker_balance__' },
   { label: '🔀 模式', msg: '__broker_switch__' },
   { label: '💳 计费', msg: '__billing_dashboard__' },
+  { label: '🔄 续费', msg: '__billing_renewal_payment__' },
   { label: '🧠 记忆', msg: '__memory__' },
   { label: '🔑 密钥', msg: '__vault__' },
 ];
@@ -516,6 +517,15 @@ export default function MainPage() {
         setMessages(prev => [...prev, { type: 'system', content: `📊 近${bu.period_days || 30}天用量: 总¥${bu.total_all_cny || 0}\n${buProvs}` }]);
         break;
       }
+      case 'billing_renewal_payment': {
+        const rp = payload || {};
+        const rpItems = (rp.items || []).map(i => `  ${i.name}: ¥${i.cost_with_margin}`).join('\n');
+        const rpMsg = rp.wallet_address
+          ? `💳 续费支付\n收款: ${rp.wallet_address} (${rp.wallet_label || 'USDT-TRC20'})\n余额: ¥${rp.current_balance_cny}\n${rpItems ? '待续费:\n' + rpItems : ''}\n合计: ¥${rp.total_renewal_cny}`
+          : '续费信息加载中...';
+        setMessages(prev => [...prev, { type: 'system', content: rpMsg }]);
+        break;
+      }
       case 'credential_granted':
       case 'credential_revoked':
       case 'credential_status': {
@@ -697,6 +707,11 @@ export default function MainPage() {
     }
     if (action.msg === '__billing_dashboard__') {
       sendPacket({ type: 'billing_dashboard', payload: {} });
+      setChatOpen(true);
+      return;
+    }
+    if (action.msg === '__billing_renewal_payment__') {
+      sendPacket({ type: 'billing_renewal_payment', payload: {} });
       setChatOpen(true);
       return;
     }

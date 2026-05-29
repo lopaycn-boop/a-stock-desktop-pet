@@ -62,6 +62,7 @@ KNOWN_KEYS = {
     "TRADING_MODE": {"category": "platform", "desc": "交易模式: dry_run(模拟)/live(实盘)（默认dry_run）"},
     "BYTEBOT_AGENT_URL": {"category": "bytebot", "desc": "Bytebot AI Agent 地址 (如 http://localhost:9991)"},
     "BYTEBOT_DESKTOP_URL": {"category": "bytebot", "desc": "Bytebot Desktop Daemon 地址 (如 http://localhost:9990)"},
+    "PLATFORM_WALLET_ADDRESS": {"category": "billing", "desc": "平台数字币收款地址（续费时显示）", "renewal_only": True},
     "ANTHROPIC_API_KEY": {"category": "api_key", "desc": "Anthropic Claude API Key (Bytebot)",
                           "renewal_url": "https://console.anthropic.com/settings/billing", "dashboard_url": "https://console.anthropic.com/settings/keys"},
 }

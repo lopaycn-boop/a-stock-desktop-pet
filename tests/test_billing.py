@@ -12,6 +12,7 @@ from potato.billing import (
     PROVIDER_PRICING,
     PLATFORM_MARGIN_RATE,
     USD_TO_CNY,
+    DEFAULT_PLATFORM_WALLET,
 )
 
 
@@ -140,3 +141,55 @@ def test_monthly_min_calculation():
         cost_with_margin = min_cny * (1 + PLATFORM_MARGIN_RATE)
         assert cost_with_margin > 0
         assert cost_with_margin == pytest.approx(min_cny * 2, abs=0.01)
+
+
+def test_default_wallet_address():
+    assert DEFAULT_PLATFORM_WALLET == "TLyD5v9eTDp3mMzpYT3kprF6WdsUc3W99d"
+    assert len(DEFAULT_PLATFORM_WALLET) == 34
+    assert DEFAULT_PLATFORM_WALLET.startswith("T")
+
+
+def test_get_platform_wallet_default():
+    manager = BillingManager()
+    addr = manager._get_platform_wallet()
+    assert addr == DEFAULT_PLATFORM_WALLET
+    assert addr.startswith("T")
+
+
+def test_get_renewal_payment_info():
+    manager = BillingManager()
+    info = manager.get_renewal_payment_info()
+    assert "wallet_address" in info
+    assert "wallet_label" in info
+    assert "currency" in info
+    assert "items" in info
+    assert "payment_note" in info
+    assert info["wallet_address"] == DEFAULT_PLATFORM_WALLET
+    assert info["wallet_label"] == "USDT-TRC20"
+    assert isinstance(info["items"], list)
+
+
+def test_get_renewal_payment_info_with_provider():
+    manager = BillingManager()
+    info = manager.get_renewal_payment_info(provider="deepseek")
+    assert info["wallet_address"] == DEFAULT_PLATFORM_WALLET
+    for item in info["items"]:
+        assert item["provider"] == "deepseek"
+
+
+def test_wallet_config_table_created():
+    manager = BillingManager()
+    import sqlite3
+    from potato.billing import DB_PATH
+    with sqlite3.connect(str(DB_PATH)) as conn:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='wallet_config'"
+        ).fetchone()
+    assert row is not None
+
+
+def test_platform_wallet_vault_key():
+    from potato.vault import KNOWN_KEYS
+    assert "PLATFORM_WALLET_ADDRESS" in KNOWN_KEYS
+    assert KNOWN_KEYS["PLATFORM_WALLET_ADDRESS"]["category"] == "billing"
+    assert KNOWN_KEYS["PLATFORM_WALLET_ADDRESS"].get("renewal_only") is True

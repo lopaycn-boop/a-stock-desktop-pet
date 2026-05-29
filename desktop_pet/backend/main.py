@@ -313,6 +313,8 @@ class PotatoPetBrain:
 - 例：DeepSeek API实际消耗¥5 → 用户付费¥10（¥5 API + ¥5平台）
 - 用户可通过"💳 计费"查看各服务用量和费用明细
 - 用户可通过对话说"充值"或"看看账单"查看计费面板
+- 用户说"续费"或"支付"时 → 触发billing_renewal_payment，返回平台数字币收款地址
+- 收款地址仅在续费时显示，不在普通聊天中暴露
 
 选股分析规则：
 - 每只股票必须给出技术面信号+基本面逻辑+消息面关联 三层理由
@@ -375,7 +377,8 @@ class PotatoPetBrain:
         "broker_switch": null,
         "broker_balance": null,
         "billing_dashboard": null,
-        "billing_topup": null
+        "billing_topup": null,
+        "billing_renewal_payment": null
     }}
 }}
 
@@ -722,6 +725,9 @@ async def websocket_endpoint(websocket: WebSocket):
             elif msg_type == "billing_usage":
                 await handle_billing_usage(payload, send_to_frontend)
 
+            elif msg_type == "billing_renewal_payment":
+                await handle_billing_renewal_payment(payload, send_to_frontend)
+
             else:
                 logger.warning("Unknown msg_type from frontend: %s", msg_type)
                 await send_to_frontend("error", {"info": f"未知消息类型: {msg_type}"})
@@ -925,6 +931,7 @@ _ACTION_LABELS = {
     "billing_dashboard": "计费总览",
     "billing_topup": "充值",
     "billing_usage": "用量明细",
+    "billing_renewal_payment": "续费支付",
 }
 
 
@@ -1329,6 +1336,10 @@ async def _process_ai_actions(actions: dict, send_func):
             if isinstance(topup_amount, (int, float)) and topup_amount > 0:
                 await _emit_step(send_func, "billing_topup", "running", f"充值 ¥{topup_amount}")
                 _spawn(handle_billing_topup({"amount": float(topup_amount)}, send_func))
+
+        if actions.get("billing_renewal_payment") or actions.get("renewal_payment"):
+            await _emit_step(send_func, "billing_renewal_payment", "running", "获取续费支付信息")
+            _spawn(handle_billing_renewal_payment(actions, send_func))
 
     except Exception as e:
         logger.warning("Action processing error: %s", e)
@@ -2709,6 +2720,39 @@ async def handle_billing_usage(payload: dict, send_func):
     except Exception as e:
         logger.error("billing_usage error: %s", e)
         await send_func("error", {"info": f"用量查询失败: {e}"})
+
+
+async def handle_billing_renewal_payment(payload: dict, send_func):
+    """Show crypto wallet address ONLY when user initiates a renewal."""
+    try:
+        provider = ""
+        if isinstance(payload, dict):
+            provider = str(payload.get("billing_renewal_payment") or payload.get("provider") or "")
+
+        payment_info = _billing.get_renewal_payment_info(provider=provider)
+
+        items_text = []
+        for item in payment_info["items"]:
+            items_text.append(
+                f"  {item['name']}: ¥{item['cost_with_margin']:.0f} (原价¥{item['monthly_min_cny']:.0f}+平台费¥{item['monthly_min_cny']:.0f})"
+            )
+
+        summary = (
+            f"💳 续费支付信息\n\n"
+            f"收款地址: {payment_info['wallet_address']}\n"
+            f"币种: {payment_info['wallet_label']}\n\n"
+            f"当前余额: ¥{payment_info['current_balance_cny']:.2f}\n"
+        )
+        if items_text:
+            summary += f"待续费服务:\n" + "\n".join(items_text) + "\n"
+            summary += f"\n合计续费: ¥{payment_info['total_renewal_cny']:.2f}\n"
+        summary += f"\n{payment_info['payment_note']}"
+
+        await send_func("billing_renewal_payment", payment_info)
+        await send_reply(summary, "happy", send_func)
+    except Exception as e:
+        logger.error("billing_renewal_payment error: %s", e)
+        await send_func("error", {"info": f"续费信息获取失败: {e}"})
 
 
 async def game_loop(ws, send_func):

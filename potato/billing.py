@@ -17,6 +17,10 @@ Payment flow:
     2. For expired keys: "续费" button shows actual cost + platform margin
     3. User can top up wallet (CNY or crypto)
     4. Platform auto-renews keys when wallet has sufficient balance
+
+Crypto wallet:
+    Platform wallet address stored in vault (PLATFORM_WALLET_ADDRESS).
+    Only exposed when user initiates a renewal — never shown in idle context.
 """
 
 from __future__ import annotations
@@ -86,6 +90,9 @@ PROVIDER_PRICING = {
         "key_env": "OPENAI_API_KEY",
     },
 }
+
+
+DEFAULT_PLATFORM_WALLET = "TLyD5v9eTDp3mMzpYT3kprF6WdsUc3W99d"
 
 
 @dataclass
@@ -170,6 +177,13 @@ class BillingManager:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_prov ON usage(provider)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS wallet_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
 
     def record_usage(
         self,
@@ -351,4 +365,61 @@ class BillingManager:
             "configured_count": len(configured),
             "needs_payment_count": len(needs_payment),
             "summary_text": "\n".join(lines),
+        }
+
+    def _get_platform_wallet(self) -> str:
+        """Read platform crypto wallet address from vault, fallback to default.
+
+        Only called during renewal flow — never exposed otherwise.
+        """
+        try:
+            from potato.vault import Vault
+            vault = Vault()
+            addr = vault.get("PLATFORM_WALLET_ADDRESS")
+            if addr:
+                return addr.strip()
+        except Exception as e:
+            logger.debug("vault read for PLATFORM_WALLET_ADDRESS failed: %s", e)
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            row = conn.execute(
+                "SELECT value FROM wallet_config WHERE key = 'platform_wallet'"
+            ).fetchone()
+            if row:
+                return row[0]
+        return DEFAULT_PLATFORM_WALLET
+
+    def get_renewal_payment_info(self, provider: str = "") -> dict[str, Any]:
+        """Return payment details for a renewal — includes crypto address only when requested.
+
+        This is the ONLY entry point that exposes the wallet address.
+        Called when user initiates a renewal/topup action.
+        """
+        wallet_addr = self._get_platform_wallet()
+        wallet = self.get_wallet_balance()
+
+        providers = self.get_provider_statuses()
+        if provider:
+            providers = [p for p in providers if p.provider == provider]
+
+        renewal_items = []
+        total_renewal_cny = 0.0
+        for p in providers:
+            if not p.key_active:
+                renewal_items.append({
+                    "provider": p.provider,
+                    "name": p.name,
+                    "monthly_min_cny": p.monthly_min_cny,
+                    "cost_with_margin": p.cost_with_margin,
+                    "renewal_url": p.renewal_url,
+                })
+                total_renewal_cny += p.cost_with_margin
+
+        return {
+            "wallet_address": wallet_addr,
+            "wallet_label": "USDT-TRC20",
+            "currency": "CNY",
+            "total_renewal_cny": round(total_renewal_cny, 2),
+            "current_balance_cny": wallet["remaining_cny"],
+            "items": renewal_items,
+            "payment_note": f"请向 {wallet_addr} 支付 USDT-TRC20，到账后确认充值",
         }
