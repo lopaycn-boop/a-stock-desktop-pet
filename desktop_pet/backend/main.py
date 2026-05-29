@@ -667,6 +667,15 @@ async def websocket_endpoint(websocket: WebSocket):
             elif msg_type == "update_risk":
                 await handle_update_risk(payload, send_to_frontend)
 
+            elif msg_type == "broker_status":
+                await handle_broker_status(send_to_frontend)
+
+            elif msg_type == "broker_switch":
+                await handle_broker_switch(payload, send_to_frontend)
+
+            elif msg_type == "broker_balance":
+                await handle_broker_balance(send_to_frontend)
+
             else:
                 logger.warning("Unknown msg_type from frontend: %s", msg_type)
                 await send_to_frontend("error", {"info": f"未知消息类型: {msg_type}"})
@@ -864,6 +873,9 @@ _ACTION_LABELS = {
     "trade_execute": "执行交易",
     "trade_auto_start": "启动自动操盘",
     "update_risk": "更新风控参数",
+    "broker_status": "查询券商状态",
+    "broker_switch": "切换交易模式",
+    "broker_balance": "查询账户余额",
 }
 
 
@@ -2471,6 +2483,87 @@ async def handle_review_history(payload: dict, send_func):
     except Exception as e:
         logger.error("review_history error: %s", e)
         await send_func("error", {"info": f"历史查询失败: {e}"})
+
+
+async def handle_broker_status(send_func):
+    try:
+        from potato.trading.broker import BrokerAdapter
+        broker = BrokerAdapter()
+        health = await broker.health_check()
+        balance = await broker.get_balance()
+        await send_func("broker_status", {
+            "mode": broker.mode,
+            "is_live": broker.is_live,
+            "health": health,
+            "balance": balance.to_dict(),
+        })
+    except Exception as e:
+        logger.error("broker_status error: %s", e)
+        await send_func("broker_status", {
+            "mode": "dry_run",
+            "is_live": False,
+            "health": {"ok": False, "message": str(e)},
+            "balance": {},
+        })
+
+
+async def handle_broker_switch(payload: dict, send_func):
+    try:
+        from potato.trading.broker import BrokerAdapter
+        target_mode = str(payload.get("mode", "dry_run")).lower()
+        broker = BrokerAdapter()
+        result = await broker.switch_mode(target_mode)
+        if result.get("ok"):
+            mode_cn = "实盘" if result["mode"] == "live" else "模拟"
+            await send_func("broker_switch", {
+                "ok": True,
+                "mode": result["mode"],
+                "is_live": result["is_live"],
+                "message": f"交易模式已切换为 {mode_cn} 模式",
+            })
+            await send_reply(f"交易模式已切换为 {mode_cn} 模式 🥔", "happy" if target_mode == "dry_run" else "thinking", send_func)
+        else:
+            await send_func("broker_switch", {
+                "ok": False,
+                "mode": broker.mode,
+                "message": result.get("message", "切换失败"),
+            })
+            await send_reply(f"切换失败: {result.get('message', '未知原因')} 🥔", "sad", send_func)
+    except Exception as e:
+        logger.error("broker_switch error: %s", e)
+        await send_func("broker_switch", {"ok": False, "message": str(e)})
+
+
+async def handle_broker_balance(send_func):
+    try:
+        from potato.trading.broker import BrokerAdapter
+        broker = BrokerAdapter()
+        balance = await broker.get_balance()
+        positions = await broker.get_positions()
+        pos_summary = []
+        for p in positions:
+            pos_summary.append(f"{p.name}({p.symbol}) {p.quantity}股 盈亏{p.profit_pct}%")
+
+        bal_cn = (
+            f"💰 账户余额 ({'实盘' if broker.is_live else '模拟'})\n"
+            f"总资产: ¥{balance.total_assets}\n"
+            f"可用资金: ¥{balance.available_cash}\n"
+            f"持仓市值: ¥{balance.market_value}\n"
+            f"浮动盈亏: ¥{balance.profit_loss}"
+        )
+        if pos_summary:
+            bal_cn += f"\n\n📈 持仓{len(positions)}只:\n" + "\n".join(pos_summary)
+
+        await send_func("broker_balance", {
+            "balance": balance.to_dict(),
+            "positions": [p.to_dict() for p in positions],
+            "is_live": broker.is_live,
+            "summary": bal_cn,
+        })
+        await send_reply(bal_cn, "happy", send_func)
+    except Exception as e:
+        logger.error("broker_balance error: %s", e)
+        await send_func("error", {"info": f"余额查询失败: {e}"})
 
 
 async def game_loop(ws, send_func):

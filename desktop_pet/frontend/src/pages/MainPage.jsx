@@ -75,8 +75,9 @@ const QUICK_ACTIONS = [
   { label: '🔥 热点', msg: '今天有什么热点板块' },
   { label: '📊 分析', msg: '帮我分析最近值得关注的股票' },
   { label: '💰 持仓', msg: '帮我看看持仓情况' },
+  { label: '💹 余额', msg: '__broker_balance__' },
+  { label: '🔀 模式', msg: '__broker_switch__' },
   { label: '🧠 记忆', msg: '__memory__' },
-  { label: '🤖 电脑操作', msg: '__bytebot__' },
   { label: '🔑 密钥', msg: '__vault__' },
 ];
 
@@ -479,6 +480,25 @@ export default function MainPage() {
         setMessages(prev => [...prev, { type: 'system', content: tas.message || (tas.running ? '自动操盘已启动' : '自动操盘已停止') }]);
         break;
       }
+      case 'broker_status': {
+        const bs = payload || {};
+        window.__brokerIsLive = bs.is_live || false;
+        const modeLabel = bs.is_live ? '🔴 实盘' : '🟡 模拟';
+        const connected = bs.health?.ok ? '✅' : '❌';
+        setMessages(prev => [...prev, { type: 'system', content: `交易模式: ${modeLabel} | 连接${connected} | ${bs.health?.message || ''}` }]);
+        break;
+      }
+      case 'broker_switch': {
+        const bsw = payload || {};
+        window.__brokerIsLive = bsw.is_live || false;
+        setMessages(prev => [...prev, { type: 'system', content: bsw.message || '交易模式已切换' }]);
+        break;
+      }
+      case 'broker_balance': {
+        const bb = payload || {};
+        setMessages(prev => [...prev, { type: 'system', content: bb.summary || '余额查询完成' }]);
+        break;
+      }
       case 'credential_granted':
       case 'credential_revoked':
       case 'credential_status': {
@@ -653,6 +673,30 @@ export default function MainPage() {
       setChatOpen(true);
       return;
     }
+    if (action.msg === '__broker_balance__') {
+      sendPacket({ type: 'broker_balance', payload: {} });
+      setChatOpen(true);
+      return;
+    }
+    if (action.msg === '__broker_switch__') {
+      sendPacket({ type: 'broker_status', payload: {} });
+      setChatOpen(true);
+      setTimeout(() => {
+        const isLive = window.__brokerIsLive || false;
+        const nextMode = isLive ? 'dry_run' : 'live';
+        const confirmMsg = nextMode === 'live'
+          ? '⚠️ 切换到实盘模式会下真实订单！确定要切换吗？'
+          : '切换到模拟模式，不会下真实订单。';
+        setMessages(prev => [...prev, {
+          type: 'system',
+          content: confirmMsg,
+          actions: [
+            { label: nextMode === 'live' ? '🔴 确认实盘' : '🟡 确认模拟', action: 'broker_switch_confirm', payload: { mode: nextMode } },
+          ]
+        }]);
+      }, 500);
+      return;
+    }
     setChatOpen(true);
     setMessages(prev => [...prev, { type: 'user', content: action.msg }]);
     sendPacket({ type: "text_input", payload: { text: action.msg } });
@@ -744,6 +788,23 @@ export default function MainPage() {
               ) : msg.content}
               {msg.image && (
                 <img src={msg.image} alt="screenshot" className="chat-screenshot" onClick={() => window.open(msg.image, '_blank')} />
+              )}
+              {msg.actions && msg.actions.length > 0 && (
+                <div className="msg-actions" style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {msg.actions.map((act, ai) => (
+                    <button key={ai} style={{ padding: '4px 12px', borderRadius: '12px', fontSize: '12px', cursor: 'pointer', border: '1px solid #4a7c3f', background: act.payload?.mode === 'live' ? '#c0392b' : '#27ae60', color: '#fff' }}
+                      onClick={() => {
+                        if (act.action === 'broker_switch_confirm') {
+                          sendPacket({ type: 'broker_switch', payload: { mode: act.payload?.mode || 'dry_run' } });
+                        } else if (act.action === 'update_risk') {
+                          sendPacket({ type: 'update_risk', payload: act.payload || {} });
+                        }
+                        setMessages(prev => prev.map((m, mi) => mi === i ? { ...m, actions: [] } : m));
+                      }}>
+                      {act.label}
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
           ))}
