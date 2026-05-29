@@ -418,6 +418,21 @@ export default function MainPage() {
         }
         break;
       }
+      case 'plan_execute_analysis': {
+        const pxa = payload.analysis || {};
+        const pxPicks = pxa.stock_picks || [];
+        const steps = payload.steps_completed || 0;
+        const method = payload.method || 'plan_execute';
+        if (pxPicks.length > 0) {
+          const pxLines = pxPicks.slice(0, 5).map((p, i) => {
+            const ae = { BUY: '🟢买入', SELL: '🔴卖出', HOLD: '🟡持有', WATCH: '👀观察' }[p.action] || '⚪';
+            const conf = (p.confidence * 100).toFixed(0);
+            return `${i+1}. ${ae} ${p.name || ''}(${p.symbol || ''}) 置信度${conf}%\n   理由: ${(p.reasoning || '').slice(0, 120)}`;
+          }).join('\n');
+          setMessages(prev => [...prev, { type: 'system', content: `🔬 多步深度分析 (${steps}步完成)\n${pxLines}` }]);
+        }
+        break;
+      }
       case 'trade_result': {
         if (payload.ok) {
           setMessages(prev => [...prev, { type: 'system', content: `✅ 交易提交成功: ${payload.action || ''} ${payload.name || payload.symbol || ''} ¥${payload.amount_cny || ''}` }]);
@@ -716,6 +731,9 @@ case 'billing_renewal_payment': {
       if (action === 'trade_analysis') {
         setChatOpen(true);
         sendPacket({ type: 'text_input', payload: { text: '帮我分析最近值得关注的股票' } });
+      } else if (action === 'plan_execute_analysis') {
+        setChatOpen(true);
+        sendPacket({ type: 'text_input', payload: { text: '深度分析自选股，多步分析' } });
       } else if (action === 'trade_status') {
         setChatOpen(true);
         sendPacket({ type: 'trade_status', payload: {} });

@@ -26,6 +26,7 @@ from potato.trading.analyzer import (
     format_trade_decision_for_pet,
     format_trade_signal_message,
 )
+from potato.trading.plan_execute import run_plan_execute_analysis
 from potato.eastmoney import (
     EastMoneyClient,
     analyze_sentiment,
@@ -60,6 +61,40 @@ def _now_bjt() -> datetime:
 def _is_trading_day(dt: datetime | None = None) -> bool:
     d = dt or _now_bjt()
     return d.weekday() < 5
+
+
+async def _gather_eastmoney_context(symbols: list[str]) -> str:
+    blocks = []
+    em = EastMoneyClient()
+    try:
+        for symbol in symbols[:5]:
+            q = await asyncio.to_thread(em_get_realtime_quote, symbol)
+            if q and q.get("name"):
+                chg = q.get("change_pct", 0)
+                blocks.append(f"- {q['name']}({symbol}): ¥{q.get('price', 'N/A')} {chg:+.2f}%")
+    except Exception:
+        pass
+    try:
+        changes = await asyncio.to_thread(get_stock_changes)
+        if changes:
+            hot = [c for c in changes[:8] if c.get("name")]
+            if hot:
+                blocks.append("\n异动监控:")
+                for c in hot:
+                    blocks.append(f"- {c.get('name','?')}({c.get('code','?')}): {c.get('type','?')} {c.get('desc','')}")
+    except Exception:
+        pass
+    try:
+        hot_data = await asyncio.to_thread(get_hot_tables)
+        if hot_data:
+            items = hot_data[:6]
+            if items:
+                blocks.append("\n龙虎榜:")
+                for h in items:
+                    blocks.append(f"- {h.get('name','?')}({h.get('code','?')}): 买入{h.get('buy','?')} 卖出{h.get('sell','?')}")
+    except Exception:
+        pass
+    return "\n".join(blocks) if blocks else ""
 
 
 class TradingScheduler:
@@ -165,16 +200,47 @@ class TradingScheduler:
         news_items: list[dict] | None = None,
         portfolio_text: str = "",
         platform_names: str = "",
+        use_plan_execute: bool = False,
     ) -> dict[str, Any]:
         await self._emit_step("analysis", "running", f"分析中: {', '.join(symbols)}")
 
-        result = await deep_analysis(
-            symbols=symbols,
-            user_prefs=user_prefs,
-            news_items=news_items,
-            portfolio_text=portfolio_text,
-            platform_names=platform_names,
-        )
+        if use_plan_execute:
+            await self._emit_step("analysis", "running", "计划-执行分析模式启动...")
+            em_context = ""
+            sentiment_block = ""
+            try:
+                em_ctx_data = await _gather_eastmoney_context(symbols)
+                if em_ctx_data:
+                    em_context = em_ctx_data
+            except Exception:
+                pass
+            try:
+                news_text = " ".join(n.get("title", "") for n in (news_items or [])[:8])
+                if news_text.strip():
+                    sent = await asyncio.to_thread(analyze_sentiment, news_text)
+                    sentiment_block = (
+                        f"市场情绪: {sent['category']} (得分{sent['score']:.1f})\n"
+                        f"正面词: {', '.join(w for w, _ in sent.get('positive_words', [])[:5])}\n"
+                        f"负面词: {', '.join(w for w, _ in sent.get('negative_words', [])[:5])}"
+                    )
+            except Exception:
+                pass
+
+            result = await run_plan_execute_analysis(
+                symbols=symbols,
+                user_prefs=user_prefs,
+                news_items=news_items,
+                em_context=em_context,
+                sentiment_block=sentiment_block,
+            )
+        else:
+            result = await deep_analysis(
+                symbols=symbols,
+                user_prefs=user_prefs,
+                news_items=news_items,
+                portfolio_text=portfolio_text,
+                platform_names=platform_names,
+            )
 
         if result.get("ok"):
             self._last_analysis = result

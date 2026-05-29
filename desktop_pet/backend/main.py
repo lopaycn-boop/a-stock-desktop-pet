@@ -373,6 +373,7 @@ class PotatoPetBrain:
         "bytebot_desktop": null,
         "cleanup_pc": null,
         "trade_analysis": null,
+        "plan_execute_analysis": null,
         "trade_execute": null,
         "trade_auto_start": false,
         "update_risk": null,
@@ -469,6 +470,7 @@ class PotatoPetBrain:
 45. 用户说"东方财富问XX/智能问答" → em_query="问题内容"（东方财富AI金融问答）
 46. 用户说"热点板块/热门概念" → em_hotspot=true（热点发现）
 47. 用户说"XX股票实时行情/现在多少钱" → realtime_quote="股票代码"
+48. 用户说"深度分析/多步分析/仔细分析" → plan_execute_analysis=["代码1","代码2"]（计划-执行多步分析模式，先制定分析计划再逐步执行，质量更高）
 28. 用户说"买入/卖出XX" → trade_execute={{"symbol":"代码","name":"名称","action":"BUY/SELL","confidence":0.8,"reasoning":"理由","entry_price":"价格","target_price":"目标价","stop_loss":"止损价"}}
 29. 【自主操盘】操盘调度器在交易日自动启动，4个阶段全自动运行：
     - 盘前扫描(9:00) → AI自动抓新闻+筛选标的
@@ -755,6 +757,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "trade_analysis":
                 await handle_trade_analysis(payload, send_to_frontend)
+
+            elif msg_type == "plan_execute_analysis":
+                await handle_plan_execute_analysis(payload, send_to_frontend)
 
             elif msg_type == "trade_execute":
                 await handle_trade_execute(payload, send_to_frontend)
@@ -1411,6 +1416,18 @@ async def _process_ai_actions(actions: dict, send_func):
                 symbols = []
             await _emit_step(send_func, "trade_analysis", "running", f"分析: {','.join(symbols[:5])}")
             _spawn(handle_trade_analysis({"symbols": symbols}, send_func))
+
+        if actions.get("plan_execute_analysis"):
+            symbols = actions["plan_execute_analysis"]
+            if isinstance(symbols, str):
+                symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+            elif isinstance(symbols, list):
+                symbols = [str(s).strip() for s in symbols if s]
+            else:
+                from potato.user_prefs import UserPrefs
+                symbols = UserPrefs().get("watchlist", [])[:5] or ["600519", "000858", "601318"]
+            await _emit_step(send_func, "plan_execute_analysis", "running", f"多步分析: {','.join(symbols[:5])}")
+            _spawn(handle_plan_execute_analysis({"symbols": symbols}, send_func))
 
         if actions.get("trade_execute"):
             pick = actions["trade_execute"]
@@ -3069,9 +3086,64 @@ async def game_loop(ws, send_func):
 
             except Exception as e:
                 logger.warning("Proactive speech failed: %s", e)
-            finally:
-                brain.state = "idle"
-                await send_func("state_update", {"state": "idle"})
+
+
+async def handle_plan_execute_analysis(payload: dict, send_func):
+    global _trading_scheduler
+    if not _trading_scheduler:
+        _trading_scheduler = TradingScheduler(send_func, broker=_get_broker())
+    symbols = payload.get("symbols", [])
+    if not symbols:
+        from potato.user_prefs import UserPrefs
+        prefs = UserPrefs()
+        symbols = prefs.get("watchlist", [])[:5]
+    if not symbols:
+        symbols = ["000001", "600519", "000858", "601318", "000333"]
+    try:
+        brain.state = "thinking"
+        await send_func("state_update", {"state": "thinking"})
+        user_prefs = {}
+        try:
+            from potato.user_prefs import UserPrefs
+            up = UserPrefs()
+            user_prefs = {"risk_level": up.get("risk_level", ""), "watchlist": up.get("watchlist", []), "sectors": up.get("sectors", [])}
+        except Exception:
+            pass
+        result = await _trading_scheduler.run_manual_analysis(
+            symbols=symbols,
+            user_prefs=user_prefs,
+            use_plan_execute=True,
+        )
+        if result.get("ok"):
+            analysis = result.get("analysis", {})
+            picks = analysis.get("stock_picks", [])
+            formatted = format_trade_decision_for_pet(result)
+            await send_func("plan_execute_analysis", {
+                "analysis": analysis,
+                "formatted": formatted,
+                "symbols": symbols,
+                "method": "plan_execute",
+                "steps_completed": len(result.get("step_results", [])),
+            })
+            for pick in picks:
+                if pick.get("action") in ("BUY", "SELL"):
+                    signal = format_trade_signal_message(pick)
+                    if signal:
+                        await send_func("trade_signal", {
+                            "symbol": pick.get("symbol", ""),
+                            "name": pick.get("name", ""),
+                            "action": pick.get("action", ""),
+                            "confidence": pick.get("confidence", 0),
+                            "message": signal,
+                        })
+        else:
+            await send_func("error", {"info": f"多步分析失败: {result.get('error', '')}"})
+    except Exception as e:
+        logger.warning("PlanExecute analysis error: %s", e)
+        await send_func("error", {"info": _safe_error(e)})
+    finally:
+        brain.state = "idle"
+        await send_func("state_update", {"state": "idle"})
 
 
 if __name__ == "__main__":
