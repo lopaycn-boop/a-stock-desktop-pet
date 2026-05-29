@@ -19,6 +19,9 @@
 - 🖥️ **Bytebot 远程操控** — 内置Bytebot Agent(9991) + Bytebot Desktop(9990)，语音指令操控电脑
 - 🛡️ **严格风控系统** — 止损必设、用户定金额、AI定止损止盈、熔断机制、仓位管理（13条规则）
 - 🔐 **密钥保险箱** — Fernet(AES-128-CBC+HMAC-SHA256) 加密存储，前端7层正则遮蔽，绝不泄漏密钥
+- 💳 **统一计费** — 5家LLM服务商统一计费面板，用户只见总价格，2x加价模型对用户完全透明
+- 🔄 **一键续费** — 余额充足自动扣款，余额不足显示USDT-TRC20二维码+收款地址，扫码即付
+- 🔒 **源码保护** — AI不泄露源代码/架构/定价模型，输入拦截+输出脱敏+规则三重防护
 - 🎙️ **语音交互** — SiliconFlow TTS/STT，支持语音对话
 - 📱 **多渠道通知** — Telegram / 飞书 / 钉钉推送交易提醒
 - 🧠 **30天记忆** — 持久化记忆系统，记住用户偏好和对话
@@ -43,6 +46,10 @@
 │  │  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │  │
 │  │  │密钥保险箱 │ │Bytebot   │ │   专业复盘      │ │  │
 │  │  │ AES-128   │ │Agent内置 │ │  胜率/盈亏比    │ │  │
+│  │  └──────────┘ └──────────┘ └────────────────┘ │  │
+│  │  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │  │
+│  │  │ 统一计费  │ │ 券商适配 │ │ 源码+密钥保护   │ │  │
+│  │  │ QR续费    │ │dry/live │ │ 3层防护         │ │  │
 │  │  └──────────┘ └──────────┘ └────────────────┘ │  │
 │  └────────────────────────────────────────────────┘  │
 │         │ SQLite (本地) / CockroachDB (云端)         │
@@ -125,6 +132,14 @@ python -m potato
 | `VAULT_ENCRYPTION_KEY` | 密钥保险箱主密钥（生产环境必须更换） |
 | `VAULT_SALT` | 加密盐值 |
 
+### 计费配置
+
+| 变量 | 说明 |
+|------|------|
+| `PLATFORM_WALLET_ADDRESS` | 平台数字币收款地址（默认已内置 TLyD5v9eTDp3mMzpYT3kprF6WdsUc3W99d） |
+
+> 收款地址在数据库中持久化存储，重装也不会丢失。用户只需说"续费"或点🔄续费按钮即可查看。
+
 更多配置参见 `.env.example`。
 
 ## 📊 操盘流程
@@ -203,6 +218,33 @@ set BROKER_ID=eastmoney
 "切换到实盘模式"
 ```
 
+## 💳 计费系统
+
+小土豆的计费系统对用户完全透明——只显示总价，不暴露任何分账细节。
+
+### 续费流程
+
+```
+用户点击 🔄续费 或说"续费"
+  ├─ 余额充足 → ✅ 自动扣款，"续费成功！"
+  └─ 余额不足 → 显示USDT-TRC20收款二维码+地址
+                 用户扫码付款后点 ✅已付款
+                 系统确认充值 → 自动续费
+```
+
+### 计费面板
+
+- 💳 计费按钮 → 查看各服务状态和总费用
+- 💴 充值按钮 → 充值 ¥50 / ¥100
+- 余额不足时自动提示续费
+
+### 安全保护
+
+- 收款地址仅在续费时显示，不在普通对话中暴露
+- AI 严禁透露成本拆分、利润比例、费率结构
+- 三层防护：AI提示词规则 + 输入拦截正则 + 输出脱敏正则
+- 密钥保险箱值永不输出原文（只显示 sk-***xxxx 脱敏版本）
+
 ## 🛠️ 技术栈
 
 | 层 | 技术 |
@@ -213,6 +255,7 @@ set BROKER_ID=eastmoney
 | 大模型 | DeepSeek / SiliconFlow / Liner / Base44 Agent / OpenAI (5层故障转移) |
 | 数据库 | SQLite (本地) / CockroachDB (云端) |
 | 加密 | Fernet(AES-128-CBC+HMAC-SHA256) (cryptography) |
+| 计费 | 统一计费模块 (billing.py) + QR码续费 + 2x加价模型 |
 | 通知 | Telegram / 飞书 / 钉钉 |
 | 桌面操控 | Bytebot Agent(内置) / Bytebot Desktop(Docker) / Playwright / pyautogui |
 | 交易引擎 | 7 阶段调度器 + 13 条风控规则 + 专业复盘系统 |
@@ -233,8 +276,11 @@ a-stock-desktop-pet/
 │   │   └── package.json   # electron-builder 打包配置
 │   └── frontend/          # Vite + React 前端
 │       └── src/
-│           ├── pages/MainPage.jsx     # 主界面 + WS + 密钥遮蔽
-│           └── components/Live2D/      # Live2D 模型渲染 + 模型选择器
+│           ├── pages/MainPage.jsx     # 主界面 + WS + 密钥遮蔽 + 计费面板
+│           └── components/
+│               ├── Live2D/            # Live2D 模型渲染 + 模型选择器
+│               ├── BillingPanel.jsx   # 计费面板模态框
+│               └── RenewalPanel.jsx   # 续费支付模态框(QR码+收款地址)
 ├── potato/                # 核心引擎
 │   ├── trading/
 │   │   ├── scheduler.py  # 7 阶段调度器
@@ -243,6 +289,7 @@ a-stock-desktop-pet/
 │   │   ├── broker.py      # 券商适配层 (dry_run/Live)
 │   │   ├── journal.py     # 专业复盘系统
 │   │   └── risk.py        # 13 条风控规则（含止损门控）
+│   ├── billing.py         # 统一计费模块(2x加价+QR续费+钱包地址持久化)
 │   ├── intel.py           # 资讯抓取 (Google News RSS)
 │   ├── llm.py             # 5 层 LLM 故障转移
 │   ├── vault.py            # Fernet(AES-128-CBC+HMAC-SHA256) 密钥保险箱
