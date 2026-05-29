@@ -105,6 +105,7 @@ export default function MainPage() {
   const [showBillingPanel, setShowBillingPanel] = useState(false);
   const [showRenewalPanel, setShowRenewalPanel] = useState(false);
   const [showDataPanel, setShowDataPanel] = useState(false);
+  const [systemStatus, setSystemStatus] = useState(null);
   const messagesEndRef = useRef(null);
   const live2dRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -121,6 +122,10 @@ export default function MainPage() {
     switch (type) {
       case 'state_update':
         setNeuroState(payload.state);
+        break;
+      case 'system_status':
+        setMessages(prev => [...prev, { type: 'system', content: `📌 ${payload.message || JSON.stringify(payload)}` }]);
+        if (payload.status === 'shutting_down') setNeuroState('idle');
         break;
       case 'audio_chunk':
         setNeuroState("idle");
@@ -740,6 +745,7 @@ case 'billing_renewal_payment': {
   useEffect(() => {
     if (connected) {
       sendPacket({ type: 'vault_status', payload: {} });
+      fetch(`http://${window.location.hostname}:8000/health`).then(r => r.json()).then(setSystemStatus).catch(() => {});
     }
   }, [connected]);
 
@@ -975,6 +981,13 @@ case 'billing_renewal_payment': {
             <span className="dot" style={{ background: stateColor, color: stateColor }}></span>
             <span className="title">🥔 小土豆</span>
             <span className="state">{stateLabel}</span>
+            {systemStatus && (
+              <span style={{ fontSize: 10, opacity: 0.5, marginLeft: 4 }}>
+                {systemStatus.data_sources?.demo_mode ? '📋demo' :
+                 systemStatus.data_sources?.active_providers > 0 ?
+                 `🟢${systemStatus.data_sources.active_providers}key` : '🔴0key'}
+              </span>
+            )}
           </div>
           <button className="close-btn" onClick={() => setChatOpen(false)}>✕</button>
         </div>

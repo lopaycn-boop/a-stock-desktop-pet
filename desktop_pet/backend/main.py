@@ -179,6 +179,11 @@ async def lifespan(app: FastAPI):
     if _trading_scheduler and _trading_scheduler._running:
         _trading_scheduler.stop()
         logger.info("Trading scheduler stopped")
+
+    await _broadcast_event("system_status", {
+        "status": "shutting_down",
+        "message": "小土豆正在关闭，请稍候...",
+    })
     spawned = list(_spawned_tasks)
     for task in spawned:
         if not task.done():
