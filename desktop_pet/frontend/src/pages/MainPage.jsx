@@ -585,6 +585,42 @@ case 'billing_renewal_payment': {
         setMessages(prev => [...prev, { type: 'system', content: `自选股已更新: ${(wu.symbols || []).join(', ')}` }]);
         break;
       }
+      case 'platforms_list': {
+        const pl = payload || {};
+        const plIds = (pl.platforms || []).map(p => p.id || p).join(', ');
+        setMessages(prev => [...prev, { type: 'system', content: plIds ? `已连接平台: ${plIds}` : '暂无已连接平台' }]);
+        break;
+      }
+      case 'credential_schemas': {
+        const csch = payload || {};
+        setMessages(prev => [...prev, { type: 'system', content: csch.message || '凭证配置已更新' }]);
+        break;
+      }
+      case 'trade_screenshot': {
+        if (payload?.image) {
+          setMessages(prev => [...prev, { type: 'system', content: '📊 交易截图', image: payload.image }]);
+        }
+        break;
+      }
+      case 'voice_call_started':
+        setNeuroState('thinking');
+        setMessages(prev => [...prev, { type: 'system', content: '🎤 语音通话已开始' }]);
+        break;
+      case 'voice_stt_result':
+        if (payload?.text) {
+          setMessages(prev => [...prev, { type: 'assistant', content: maskSecrets(payload.text) }]);
+        }
+        break;
+      case 'voice_call_ended':
+        setNeuroState('idle');
+        setMessages(prev => [...prev, { type: 'system', content: '🔇 语音通话已结束' }]);
+        break;
+      case 'voice_changed':
+        setMessages(prev => [...prev, { type: 'system', content: `🔊 语音已切换: ${payload?.voice || ''}` }]);
+        break;
+      case 'voice_list':
+        setMessages(prev => [...prev, { type: 'system', content: `可用语音: ${(payload?.voices || []).join(', ')}` }]);
+        break;
       case 'user_prefs': {
         break;
       }
