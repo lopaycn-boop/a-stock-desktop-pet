@@ -2,6 +2,23 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.19.0] - 2025-05-30
+
+### Security Hardening (Production-Ready)
+- **Trade Confirmation Dialog**: Real trades (BUY/SELL in live mode) now require explicit user confirmation with risk acknowledgment checkbox before execution
+- **Enhanced Secret Masking**: 7-layer regex patterns now mask Bearer tokens, JWTs, hex keys, embedded credentials in URLs, and extended secret key names
+- **Safe Error Fallback**: `_safe_error()` now sanitizes all error messages through `_sanitize_reply()` before fallback, preventing any secret leakage from exception text
+- **HTTP Rate Limiting**: Added 120 req/min global rate limit middleware on all desktop_pet HTTP endpoints
+- **WebSocket Message Size Limit**: 64KB max message size prevents abuse
+- **Frontend Input Length Limit**: 4000 char max on chat input prevents oversized payloads
+- **Vault Status Optimization**: `exists()` method checks key presence without decrypting values, eliminating unnecessary crypto operations
+- **Vault Health Endpoint**: No longer decrypts all keys for status checks
+- **90 total features registered**
+
+### Bug Fixes
+- Fixed `_safe_error()` potentially leaking secrets through raw `str(exc)` when no mapped error type matched
+- Fixed vault `status()` calling `get()` (decrypt) on every required key just to check existence
+
 ## [1.18.0] - 2025-05-30
 
 ### New Features

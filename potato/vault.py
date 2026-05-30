@@ -238,6 +238,12 @@ class Vault:
         raw = row["value"] if isinstance(row, dict) else row[0]
         return _decrypt(raw)
 
+    def exists(self, key: str) -> bool:
+        with self.db.connect() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM vault WHERE key = %s", (key.upper(),))
+            return cur.fetchone() is not None
+
     def delete(self, key: str) -> bool:
         with self.db.connect() as conn:
             cur = conn.cursor()
@@ -291,7 +297,7 @@ class Vault:
 
         missing_required = []
         for key, info in KNOWN_KEYS.items():
-            if info.get("required") and not self.get(key):
+            if info.get("required") and not self.exists(key):
                 missing_required.append({"key": key, "desc": info["desc"]})
 
         encryption_active = _get_cipher() is not None and _get_cipher() != "FALLBACK"

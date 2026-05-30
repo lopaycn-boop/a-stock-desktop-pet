@@ -46,6 +46,7 @@ import SettingsBackup from '../components/SettingsBackup';
 import PerfMonitor from '../components/PerfMonitor';
 import EmojiPicker from '../components/EmojiPicker';
 import NotifFilterPanel from '../components/NotifFilterPanel';
+import TradeConfirmDialog from '../components/TradeConfirmDialog';
 import useSmartReconnect from '../hooks/useSmartReconnect';
 import useNotificationFilter from '../hooks/useNotificationFilter';
 
@@ -215,6 +216,7 @@ export default function MainPage() {
   const messagesEndRef = useRef(null);
   const chatMessagesRef = useRef(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [pendingTrade, setPendingTrade] = useState(null);
   const live2dRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
@@ -537,7 +539,12 @@ export default function MainPage() {
         playTradeSignal();
         const actionEmoji = { BUY: '🟢', SELL: '🔴', HOLD: '🟡', WATCH: '👀' }[payload.action] || '⚪';
         const signalMsg = payload.message || `${actionEmoji} ${payload.name || ''}(${payload.symbol || ''}) ${payload.action || ''}`;
-        setMessages(prev => [...prev, { type: 'system', content: signalMsg, ts: Date.now() }]);
+        const isLiveTrade = payload.mode !== 'dry_run' && (payload.action === 'BUY' || payload.action === 'SELL');
+        if (isLiveTrade) {
+          setPendingTrade({ ...payload, ts: Date.now() });
+        } else {
+          setMessages(prev => [...prev, { type: 'system', content: signalMsg, ts: Date.now() }]);
+        }
         break;
       }
       case 'trade_analysis': {
@@ -1090,9 +1097,15 @@ case 'billing_renewal_payment': {
     sendPacket({ type: "interrupt" });
   };
 
+  const MAX_INPUT_LENGTH = 4000;
+
   const handleSend = () => {
     const text = inputText.trim();
     if (!text) return;
+    if (text.length > MAX_INPUT_LENGTH) {
+      setMessages(prev => [...prev, { type: 'system', content: `⚠️ 消息过长(>${MAX_INPUT_LENGTH}字符)，请分段发送`, ts: Date.now() }]);
+      return;
+    }
     setInputText('');
     setActionSteps([]);
     if (neuroState === "speaking" || isPlaying) interruptNeuro();
@@ -1695,6 +1708,23 @@ handleExportChat={handleExportChat}
       />
 
       {TooltipOverlay}
+
+      {pendingTrade && (
+        <TradeConfirmDialog
+          trade={pendingTrade}
+          onConfirm={(trade) => {
+            setMessages(prev => [...prev, { type: 'system', content: `✅ 已确认: ${trade.action} ${trade.name || trade.code || ''}`, ts: Date.now() }]);
+            sendPacket({ type: 'trade_confirm', payload: trade });
+            setPendingTrade(null);
+          }}
+          onCancel={() => {
+            setMessages(prev => [...prev, { type: 'system', content: '❌ 交易已取消', ts: Date.now() }]);
+            sendPacket({ type: 'trade_cancel', payload: { reason: 'user_rejected' } });
+            setPendingTrade(null);
+          }}
+          lang={isZh ? 'zh' : 'en'}
+        />
+      )}
     </div>
     </ErrorBoundary>
   );

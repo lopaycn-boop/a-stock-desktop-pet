@@ -28,7 +28,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -88,6 +88,20 @@ _WS_TOKEN = os.getenv("PET_WS_TOKEN", "")  # Set PET_WS_TOKEN env var for produc
 _RATE_LIMIT_WINDOW = 5.0
 _RATE_LIMIT_MAX = 30
 _rate_bucket: dict[str, list[float]] = defaultdict(list)
+
+_HTTP_RATE_BUCKET: dict[str, list[float]] = defaultdict(list)
+_HTTP_RATE_LIMIT_WINDOW = 60.0
+_HTTP_RATE_LIMIT_MAX = 120
+
+
+def _check_http_rate_limit(ip: str) -> bool:
+    now = time.time()
+    window = _HTTP_RATE_BUCKET[ip]
+    window[:] = [t for t in window if now - t < _HTTP_RATE_LIMIT_WINDOW]
+    if len(window) >= _HTTP_RATE_LIMIT_MAX:
+        return False
+    window.append(now)
+    return True
 
 
 def _check_rate_limit(ip: str) -> bool:
@@ -210,6 +224,15 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
+
+
+@app.middleware("http")
+async def http_rate_limit_middleware(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_http_rate_limit(client_ip):
+        return JSONResponse(status_code=429, content={"detail": "Too many requests"})
+    response = await call_next(request)
+    return response
 
 
 class PotatoPetBrain:
@@ -566,11 +589,7 @@ def health():
     vault = Vault()
     vault_keys = {}
     for key_name in ["DEEPSEEK_API_KEY", "SILICON_API_KEY", "LINER_API_KEY", "OPENAI_API_KEY", "BASE44_API_KEY", "EM_API_KEY", "IWENCAI_API_KEY"]:
-        val = vault.get(key_name)
-        if val:
-            vault_keys[key_name] = "active"
-        else:
-            vault_keys[key_name] = "empty"
+        vault_keys[key_name] = "active" if vault.exists(key_name) else "empty"
 
     active_providers = sum(1 for v in vault_keys.values() if v == "active")
 
@@ -654,6 +673,9 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
+            if len(data) > 65536:
+                await send_to_frontend("error", {"info": "消息过长，请缩短后重试"})
+                continue
             if not _check_rate_limit(f"ws_{client_host}"):
                 await send_to_frontend("error", {"info": "消息太频繁，请稍后再试"})
                 await asyncio.sleep(1)
@@ -1655,10 +1677,14 @@ async def _process_ai_actions(actions: dict, send_func):
 _SANITIZE_PATTERNS = [
     (re.compile(r'(sk-[a-zA-Z0-9]{4})[a-zA-Z0-9]{12,}([a-zA-Z0-9]{4})'), r'\1***\2'),
     (re.compile(r'(TLyD5v9e)[a-zA-Z0-9]{10,}([a-zA-Z0-9]{4})'), r'\1***\2'),
-    (re.compile(r'(password|passwd|pwd|token|secret|api_key|apikey)\s*[:=]\s*["\']?[a-zA-Z0-9_\-]{8,}["\']?', re.I), r'\1=***'),
+    (re.compile(r'(password|passwd|pwd|token|secret|api_key|apikey|api_secret|access_key|private_key|auth_key)\s*[:=]\s*["\']?[a-zA-Z0-9_\-]{8,}["\']?', re.I), r'\1=***'),
+    (re.compile(r'(Bearer\s+)[a-zA-Z0-9_\-\.]{20,}', re.I), r'\1***'),
+    (re.compile(r'(https?://[^\s/]+[^\s]*?:[^\s/]+?@)', re.I), r'https://***@'),
     (re.compile(r'(from|import)\s+potato\.\w+', re.I), r'\1 ***'),
     (re.compile(r'(sqlite|billing\.db|vault\.py|fernet|encrypt|decrypt|_margin_|cost_with_margin|PLATFORM_MARGIN)', re.I), r'***'),
     (re.compile(r'(def|class|async\s+def)\s+\w+\s*\('), r'***'),
+    (re.compile(r'[a-f0-9]{40,}', re.I), r'***HEX***'),
+    (re.compile(r'(eyJ[a-zA-Z0-9_\-]{5,})\.[a-zA-Z0-9_\-]{5,}\.[a-zA-Z0-9_\-]{5,}', re.I), r'***JWT***'),
 ]
 
 
@@ -1688,12 +1714,14 @@ _SANITIZED_ERROR_MESSAGES = {
 
 
 def _safe_error(exc: Exception, fallback: str = "操作失败，请稍后重试") -> str:
-    """Convert exception to safe user-facing message without exposing internals."""
     exc_type = type(exc).__name__.lower()
     exc_msg = str(exc).lower()
     for key, msg in _SANITIZED_ERROR_MESSAGES.items():
         if key in exc_type or key in exc_msg:
             return msg
+    sanitized = _sanitize_reply(str(exc))
+    if len(sanitized) < 5 or sanitized.strip() == "***":
+        return fallback
     return fallback
 
 
