@@ -2,7 +2,19 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
-## [1.13.0] - 2025-05-30
+## [1.14.0] - 2025-05-30
+
+### New Features
+- **Stock Chart (K-line)**: Canvas-based candlestick/line chart with volume bars, hover crosshair, OHLCV display
+- **Portfolio Dashboard**: Holdings overview with positions table, total cost/market value/P&L, weight bars, real-time price display
+- **Strategy Editor**: Preset strategies (conservative/balanced/aggressive), custom stop-loss/take-profit/max positions, indicator toggle (MA/MACD/RSI/KDJ/Bollinger/Volume), trading hours config
+- **Dashboard Tab**: 📋 quick action opens 3-tab dashboard overlay (行情/持仓/策略)
+- **69 total features registered**
+
+### UX
+- Dashboard overlay shows as side panel when chat is open
+- Chart supports candle/line toggle, auto-scales to last 60 bars
+- Strategy changes send `update_risk` packet to backend
 
 ### New Features
 - **Keyboard Help** (? key): Full overlay listing all shortcuts — Ctrl+K/F/D/L/E, Esc, etc.

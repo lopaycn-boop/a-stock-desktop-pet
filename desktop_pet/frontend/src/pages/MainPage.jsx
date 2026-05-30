@@ -35,6 +35,9 @@ import useI18n from '../hooks/useI18n';
 import useTheme from '../hooks/useTheme';
 import useChatResize from '../hooks/useChatResize';
 import useTooltip from '../hooks/useTooltip.jsx';
+import StockChart from '../components/StockChart';
+import PortfolioDashboard from '../components/PortfolioDashboard';
+import StrategyEditor from '../components/StrategyEditor';
 
 function formatTs(ts) {
   if (!ts) return '';
@@ -151,6 +154,7 @@ const QUICK_ACTIONS = [
   { label: '💰 持仓', msg: '帮我看看持仓情况' },
   { label: '💹 余额', msg: '__broker_balance__' },
   { label: '🔀 模式', msg: '__broker_switch__' },
+  { label: '📋 仪表盘', msg: '__dashboard__' },
   { label: '💳 计费', msg: '__billing_dashboard__' },
   { label: '🔄 续费', msg: '__billing_renewal_payment__' },
   { label: '🧠 记忆', msg: '__memory__' },
@@ -190,6 +194,7 @@ export default function MainPage() {
   const [showDataPanel, setShowDataPanel] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showTradeHistory, setShowTradeHistory] = useState(false);
+  const [dashboardTab, setDashboardTab] = useState('chart');
   const [showOnboarding, setShowOnboarding] = useState(() => {
     try { return !localStorage.getItem('potato_onboarding_done'); } catch(e) { return false; }
   });
@@ -1227,6 +1232,11 @@ case 'billing_renewal_payment': {
       setShowTradeHistory(true);
       return;
     }
+    if (action.msg === '__dashboard__') {
+      setDashboardTab('chart');
+      setChatOpen(true);
+      return;
+    }
     setChatOpen(true);
     setMessages(prev => [...prev, { type: 'user', content: action.msg }]);
     sendPacket({ type: "text_input", payload: { text: action.msg } });
@@ -1554,6 +1564,41 @@ case 'billing_renewal_payment': {
           sendPacket={sendPacket}
           messages={messages}
         />
+      )}
+
+      {/* Dashboard overlay */}
+      {chatOpen && (
+        <div style={{
+          position: 'fixed', top: 60, left: 16, bottom: 16, width: 380,
+          background: 'var(--bg-secondary)', borderRadius: 16, border: '1px solid var(--border)',
+          boxShadow: '0 8px 32px var(--shadow)', zIndex: 100, overflow: 'hidden',
+          display: dashboardTab ? 'flex' : 'none', flexDirection: 'column',
+        }}>
+          <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+            {[
+              { id: 'chart', icon: '📈', label: isZh ? '行情' : 'Market' },
+              { id: 'portfolio', icon: '💼', label: isZh ? '持仓' : 'Portfolio' },
+              { id: 'strategy', icon: '🎯', label: isZh ? '策略' : 'Strategy' },
+            ].map(tab => (
+              <button key={tab.id} onClick={() => setDashboardTab(tab.id)} style={{
+                flex: 1, padding: '8px 4px', border: 'none', cursor: 'pointer',
+                background: dashboardTab === tab.id ? 'var(--bg-secondary)' : 'transparent',
+                color: dashboardTab === tab.id ? 'var(--accent)' : 'var(--text-muted)',
+                fontSize: 12, fontWeight: dashboardTab === tab.id ? 600 : 400,
+                borderBottom: dashboardTab === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+              }}>{tab.icon} {tab.label}</button>
+            ))}
+            <button onClick={() => setDashboardTab(null)} style={{
+              padding: '0 10px', border: 'none', background: 'none', color: 'var(--text-muted)',
+              cursor: 'pointer', fontSize: 14,
+            }}>✕</button>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {dashboardTab === 'chart' && <StockChart symbol={isZh ? '上证指数' : 'SSE Index'} width={356} height={220} />}
+            {dashboardTab === 'portfolio' && <PortfolioDashboard lang={isZh ? 'zh' : 'en'} />}
+            {dashboardTab === 'strategy' && <StrategyEditor riskConfig={{ mode: 'balanced', stopLoss: 5, takeProfit: 10, maxPositions: 3 }} onApply={(cfg) => { sendPacket({ type: 'update_risk', payload: cfg }); showToast('策略已应用', 'success'); }} lang={isZh ? 'zh' : 'en'} />}
+          </div>
+        </div>
       )}
 
       {/* Keyboard shortcuts */}

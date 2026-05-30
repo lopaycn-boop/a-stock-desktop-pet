@@ -6,10 +6,10 @@ import pytest
 def test_verify_module_import():
     from potato.verify import verify
     from potato.version import __version__, __author__, BUILD, FEATURES
-    assert __version__ == "1.13.0"
+    assert __version__ == "1.14.0"
     assert __author__ == "自由的风"
     assert BUILD == "20250530"
-    assert len(FEATURES) == 66
+    assert len(FEATURES) == 69
 
 
 def test_verify_module_runs():
@@ -47,4 +47,4 @@ def test_version_endpoint_logic():
     if isinstance(data, bytes):
         import json
         data = json.loads(data)
-    assert data.get("version") == "1.13.0" or "1.13.0" in str(data)
+    assert data.get("version") == "1.14.0" or "1.14.0" in str(data)
