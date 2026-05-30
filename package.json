@@ -1,0 +1,27 @@
+{
+  "name": "a-stock-desktop-pet",
+  "version": "1.0.0",
+  "description": "> 一键下载即用的AI桌面操盘助手，除资金金额外全部AI自主",
+  "main": "obfuscate.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lopaycn-boop/GBTxiaotudouquannengcaopanshou.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/lopaycn-boop/GBTxiaotudouquannengcaopanshou/issues"
+  },
+  "homepage": "https://github.com/lopaycn-boop/GBTxiaotudouquannengcaopanshou#readme",
+  "dependencies": {
+    "javascript-obfuscator": "^5.4.3"
+  }
+}

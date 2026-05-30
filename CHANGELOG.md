@@ -2,6 +2,19 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.20.0] - 2025-05-30
+
+### Source Code Protection (Production Build)
+- **JavaScript Obfuscation**: All frontend JS obfuscated with javascript-obfuscator (RC4 encoding + control flow flattening + dead code injection + self-defending + debug protection)
+- **Python Compilation**: All .py compiled to .pyc (opt-2) for distribution
+- **Obfuscated Bundle**: index.js 0.3MB → 4.8MB, total JS 14.3MB — decompilation extremely difficult
+- **90 features registered**
+
+### Note
+- This is the first production-ready build with full source protection
+- Obfuscation runs on `dist/` after Vite build, before NSIS packaging
+- Original source code remains in git for development
+
 ## [1.19.0] - 2025-05-30
 
 ### Security Hardening (Production-Ready)

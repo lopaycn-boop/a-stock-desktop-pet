@@ -1,6 +1,6 @@
 {
   "name": "potato-desktop-pet",
-  "version": "1.19.0",
+  "version": "1.20.0",
   "description": "小土豆 AI操盘桌宠 — 自主交易+全电脑操控+Live2D",
   "author": "自由的风",
   "main": "main.js",
@@ -69,13 +69,15 @@
       ],
       "icon": "assets/icon.ico"
     },
-"nsis": {
+    "nsis": {
       "oneClick": true,
       "perMachine": true,
       "allowElevation": true,
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
-      "installerLanguages": ["zh-CN"],
+      "installerLanguages": [
+        "zh-CN"
+      ],
       "language": 2052,
       "installerIcon": "assets/icon.ico",
       "unicode": true
@@ -87,7 +89,7 @@
     }
   },
   "devDependencies": {
-    "electron": "^28.0.0",
+    "electron": "^28.3.3",
     "electron-builder": "^24.9.1"
   },
   "dependencies": {
