@@ -5,6 +5,7 @@ import ModelPicker from '../components/ModelPicker';
 import BillingPanel from '../components/BillingPanel';
 import RenewalPanel from '../components/RenewalPanel';
 import DataPanel from '../components/DataPanel';
+import SettingsPanel from '../components/SettingsPanel';
 import '../App.css';
 
 import { useAudioQueue } from '../hooks/useAudioQueue';
@@ -127,6 +128,7 @@ const QUICK_ACTIONS = [
   { label: '🔑 密钥', msg: '__vault__' },
   { label: '📡 数据', msg: '__data_panel__' },
   { label: '🆙 更新', msg: '__check_updates__' },
+  { label: '⚙️ 设置', msg: '__settings__' },
 ];
 
 export default function MainPage() {
@@ -145,6 +147,8 @@ export default function MainPage() {
   const [showBillingPanel, setShowBillingPanel] = useState(false);
   const [showRenewalPanel, setShowRenewalPanel] = useState(false);
   const [showDataPanel, setShowDataPanel] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [alwaysOnTop, setAlwaysOnTop] = useState(true);
   const [systemStatus, setSystemStatus] = useState(null);
   const messagesEndRef = useRef(null);
   const live2dRef = useRef(null);
@@ -1064,6 +1068,10 @@ case 'billing_renewal_payment': {
       }
       return;
     }
+    if (action.msg === '__settings__') {
+      setShowSettings(true);
+      return;
+    }
     setChatOpen(true);
     setMessages(prev => [...prev, { type: 'user', content: action.msg }]);
     sendPacket({ type: "text_input", payload: { text: action.msg } });
@@ -1147,6 +1155,18 @@ case 'billing_renewal_payment': {
         </div>
 
         <div className="chat-msgs">
+          {!connected && (
+            <div style={{ position: 'sticky', top: 0, zIndex: 10, background: 'rgba(255,82,82,0.15)', borderBottom: '1px solid rgba(255,82,82,0.3)', color: '#ff8a80', textAlign: 'center', fontSize: 12, padding: '6px', backdropFilter: 'blur(8px)' }}>
+              ⚠️ 连接断开，正在重连...
+            </div>
+          )}
+          {neuroState === 'thinking' && chatOpen && (
+            <div className="chat-msg assistant" style={{ opacity: 0.7 }}>
+              <div style={{ fontSize: 13, color: '#64b5f6' }}>
+                思考中<LoadingDots />
+              </div>
+            </div>
+          )}
           {messages.length === 0 && vaultReady === null && (
             <div className="empty-hint">正在连接...</div>
           )}
@@ -1162,9 +1182,17 @@ case 'billing_renewal_payment': {
               <span className="sub">密钥已就绪 ✓</span>
             </div>
           )}
-          {messages.map((msg, i) => (
-            <div key={msg._key || i} className={`chat-msg ${msg.type}`}
-              style={{ position: 'relative', cursor: 'pointer' }}
+          {messages.map((msg, i) => {
+            const semanticClass = msg.type === 'system' && typeof msg.content === 'string'
+              ? msg.content.startsWith('❌') || msg.content.startsWith('⚠️') || msg.content.startsWith('🛑') ? ' error'
+                : msg.content.startsWith('✅') || msg.content.startsWith('🔗') ? ' success'
+                : msg.content.startsWith('🟢') || msg.content.startsWith('🔴') || msg.content.startsWith('📊') || msg.content.startsWith('🔬') ? ' trade'
+                : msg.content.startsWith('⚠️') || msg.content.startsWith('🛡️') ? ' warning'
+                : ''
+              : '';
+            return (
+            <div key={msg._key || msg.ts || i} className={`chat-msg ${msg.type}${semanticClass}`}
+              style={{ position: 'relative', cursor: msg.type === 'system' || msg.type === 'user' || msg.type === 'assistant' ? 'pointer' : 'default' }}
               onClick={() => copyToClipboard(typeof msg.content === 'string' ? msg.content : '')}
               title="点击复制">
               <div style={{ fontSize: '10px', opacity: 0.4, marginBottom: 2 }}>{formatTs(msg.ts)}</div>
@@ -1202,7 +1230,8 @@ case 'billing_renewal_payment': {
                 </div>
 )}
             </div>
-          ))}
+            );
+          })}
           <div ref={messagesEndRef} />
         </div>
 
@@ -1265,6 +1294,20 @@ case 'billing_renewal_payment': {
           </div>
           <DataPanel sendPacket={sendPacket} messages={messages} />
         </div>
+      )}
+
+      {showSettings && (
+        <SettingsPanel
+          onClose={() => setShowSettings(false)}
+          wakeListening={wakeListening}
+          toggleWakeWord={wakeListening ? stopWakeListener : startWakeListener}
+          alwaysOnTop={alwaysOnTop}
+          onToggleAlwaysOnTop={() => {
+            const next = !alwaysOnTop;
+            setAlwaysOnTop(next);
+            if (window.potatoAPI?.setAlwaysOnTop) window.potatoAPI.setAlwaysOnTop(next);
+          }}
+        />
       )}
 
       {/* Keyboard shortcuts */}

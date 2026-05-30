@@ -306,6 +306,34 @@
   padding: 7px 14px;
 }
 
+.chat-msg.system.error {
+  background: rgba(255,82,82,0.12);
+  color: #ff8a80;
+  border-color: rgba(255,82,82,0.25);
+}
+
+.chat-msg.system.success {
+  background: rgba(105,240,174,0.1);
+  color: #69f0ae;
+  border-color: rgba(105,240,174,0.2);
+}
+
+.chat-msg.system.trade {
+  background: rgba(100,181,246,0.12);
+  color: #90caf9;
+  border-color: rgba(100,181,246,0.25);
+  text-align: left;
+  font-size: 13px;
+}
+
+.chat-msg.system.warning {
+  background: rgba(255,152,0,0.12);
+  color: #ffb74d;
+  border-color: rgba(255,152,0,0.25);
+  text-align: left;
+  font-size: 13px;
+}
+
 /* ── Screenshot Thumbnail ── */
 .chat-screenshot {
   display: block;

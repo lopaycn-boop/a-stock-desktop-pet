@@ -2,6 +2,24 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.4.0] - 2025-05-30
+
+### New Features
+- **Settings Panel** (`⚙️ 设置`): Volume slider, TTS mute, desktop notifications toggle, wake word toggle, always-on-top, opacity slider, auto-start toggle
+- **Connection Status Banner**: Sticky red banner when WebSocket disconnected
+- **Typing Indicator**: "思考中..." bubble with loading dots in chat when AI is processing
+- **System Message Themes**: Trade signals (blue), errors (red), successes (green), warnings (amber) — visual classes `.trade`, `.error`, `.success`, `.warning`
+
+### UX Improvements
+- **Quick Action Grouping**: Added `⚙️ 设置` and `🆙 更新` buttons
+- Messages have subtle timestamp (HH:MM) above content
+- Click any message to copy text
+
+### Technical
+- `SettingsPanel.jsx` with localStorage persistence
+- Semantic CSS classes for system messages
+- 204 tests passing
+
 ## [1.3.0] - 2025-05-30
 
 ### UX Improvements
