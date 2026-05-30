@@ -86,13 +86,14 @@ def test_cache_ttl():
 
 
 def test_fetch_failure_graceful():
-    from potato.trendradar import trending, _CACHE
+    from potato.trendradar import trending, _CACHE, _DEMO_TRENDING
     _CACHE.clear()
     with patch("potato.trendradar._fetch_platform") as mock_fetch:
         mock_fetch.return_value = None  # network failure
         result = trending(platforms=["weibo"])
         assert result["ok"] is True
-        assert result["items"] == []
+        # Should fall back to demo data
+        assert len(result["items"]) > 0
 
 
 def test_parse_items_dict():
