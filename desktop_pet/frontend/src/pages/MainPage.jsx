@@ -24,8 +24,11 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import SplashScreen from '../components/SplashScreen';
 import ToastContainer, { showToast } from '../components/ToastContainer';
 import QuickReplyChips from '../components/QuickReplyChips';
+import MessageActions from '../components/MessageActions';
+import ChatSearch from '../components/ChatSearch';
 import useI18n from '../hooks/useI18n';
 import useTheme from '../hooks/useTheme';
+import useChatResize from '../hooks/useChatResize';
 
 function formatTs(ts) {
   if (!ts) return '';
@@ -147,6 +150,8 @@ export default function MainPage() {
   const { messages, setMessages, clearMessages } = usePersistentMessages();
   const { t, lang, switchLang, isZh } = useI18n();
   const { theme, effectiveTheme, cycleTheme } = useTheme();
+  const { width: chatWidth, resizeHandleProps, isDragging } = useChatResize(380);
+  const [showChatSearch, setShowChatSearch] = useState(false);
   const [neuroState, setNeuroState] = useState("idle");
   const [inputText, setInputText] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
@@ -1051,6 +1056,36 @@ case 'billing_renewal_payment': {
     sendPacket({ type: "text_input", payload: { text } });
   };
 
+  const handleDeleteMessage = useCallback((msg) => {
+    setMessages(prev => prev.filter(m => m.ts !== msg.ts));
+    showToast('消息已删除', 'info', 1500);
+  }, [setMessages]);
+
+  const handleRetryMessage = useCallback((msg) => {
+    if (msg.type === 'user' && msg.content) {
+      const text = msg.content.replace(/^\[.*?hidden\]/g, '').trim();
+      if (text) {
+        sendPacket({ type: 'text_input', payload: { text } });
+        showToast('已重试', 'info', 1500);
+      }
+    }
+  }, [sendPacket]);
+
+  const handleJumpToMessage = useCallback((idx) => {
+    setShowChatSearch(false);
+    setChatOpen(true);
+    setTimeout(() => {
+      if (chatMessagesRef.current) {
+        const msgs = chatMessagesRef.current.querySelectorAll('.chat-msg');
+        if (msgs[idx]) {
+          msgs[idx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          msgs[idx].style.outline = '2px solid var(--accent)';
+          setTimeout(() => { msgs[idx].style.outline = ''; }, 2000);
+        }
+      }
+    }, 100);
+  }, []);
+
   const handleQuickAction = (action) => {
     if (action.msg === '__vault__') {
       sendPacket({ type: 'vault_status', payload: {} });
@@ -1196,7 +1231,8 @@ case 'billing_renewal_payment': {
       </div>
 
       {/* 聊天浮窗：左侧 */}
-      <div className={`chat-card ${chatOpen ? 'visible' : 'hidden'}`}>
+      <div className={`chat-card ${chatOpen ? 'visible' : 'hidden'}`} style={{ width: chatWidth, transition: isDragging?.current ? 'none' : 'width 0.2s' }}>
+        <div className="chat-resize-handle" {...resizeHandleProps} style={{ position: 'absolute', top: 0, bottom: 0, right: 0, width: 6, cursor: 'ew-resize', zIndex: 10 }} />
         <div className="chat-card-head">
           <div className="head-left">
             <span className="dot" style={{ background: stateColor, color: stateColor }}></span>
@@ -1225,8 +1261,18 @@ case 'billing_renewal_payment': {
           <button className="close-btn" onClick={() => setChatOpen(false)}>✕</button>
             <button onClick={clearMessages} title="清空聊天记录" style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>🗑️</button>
             <button onClick={() => switchLang(isZh ? 'en' : 'zh')} title={isZh ? 'Switch to English' : '切换到中文'} style={{ background: 'none', border: 'none', color: isZh ? '#69f0ae' : '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>🌐</button>
-            <button onClick={cycleTheme} title={theme === 'dark' ? '切换浅色' : theme === 'light' ? '跟随系统' : '切换深色'} style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>{effectiveTheme === 'dark' ? '🌙' : '☀️'}</button>
-        </div>
+<button onClick={cycleTheme} title={theme === 'dark' ? '切换浅色' : theme === 'light' ? '跟随系统' : '切换深色'} style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>{effectiveTheme === 'dark' ? '🌙' : '☀️'}</button>
+            <button onClick={() => setShowChatSearch(s => !s)} title="搜索聊天" style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>🔍</button>
+         </div>
+
+        {showChatSearch && (
+          <ChatSearch
+            messages={messages}
+            onJumpTo={handleJumpToMessage}
+            onClose={() => setShowChatSearch(false)}
+            lang={isZh ? 'zh' : 'en'}
+          />
+        )}
 
         <div className="chat-quick">
           {QUICK_ACTIONS.map(a => (
@@ -1317,6 +1363,7 @@ case 'billing_renewal_payment': {
                   ))}
                 </div>
 )}
+              <MessageActions message={msg} onRetry={handleRetryMessage} onDelete={handleDeleteMessage} lang={isZh ? 'zh' : 'en'} />
             </div>
             );
           })}

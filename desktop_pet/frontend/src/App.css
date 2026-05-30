@@ -301,6 +301,15 @@
   animation: msg-in 0.2s ease;
 }
 
+.chat-msg:hover .msg-actions {
+  opacity: 1 !important;
+}
+
+.chat-resize-handle:hover {
+  background: var(--accent);
+  opacity: 0.3;
+}
+
 .chat-msg.user {
   background: var(--msg-user);
   color: var(--accent);

@@ -2,6 +2,19 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.11.0] - 2025-05-30
+
+### New Features
+- **Message Actions**: 📋复制/🔄重试/✕删除 per message (hover to reveal)
+- **Chat Search**: 🔍 button in chat header, full-text search with up/down navigation and jump-to-highlight
+- **Drag-Resize Chat Panel**: Drag right edge to resize chat width (280–600px), persisted to localStorage
+- **57 total features registered**
+
+### UX
+- Message actions appear on hover with smooth opacity transition
+- Search results highlight matched message with 2s accent outline
+- Chat resize handle appears on hover with accent color indicator
+
 ## [1.10.0] - 2025-05-30
 
 ### New Features
