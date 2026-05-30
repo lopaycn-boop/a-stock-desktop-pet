@@ -2,6 +2,22 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.3.0] - 2025-05-30
+
+### UX Improvements
+- **Message Timestamps**: Every chat message now shows a time label (HH:MM)
+- **Click to Copy**: Click any message to copy its text to clipboard
+- **Keyboard Shortcuts**: Esc closes chat, Ctrl+Enter sends, Ctrl+1-9 triggers quick actions
+- **Sound Effects**: Trade signals play a chime, blocked trades play a risk alert tone, via Web Audio API (no files needed)
+- **Window Position Memory**: App remembers last window position/size across restarts
+
+### Internal
+- Added `useSounds.js` hook with `playTradeSignal()`, `playRiskAlert()`, `playChatNotification()`
+- Added `KeyboardShortcuts` component (invisible, event-only)
+- Added `get-bounds` IPC handler in Electron
+- Window bounds saved to `userData/window-bounds.json`
+- 204 tests passing
+
 ## [1.2.0] - 2025-05-30
 
 ### New Features

@@ -12,7 +12,44 @@ import { useNeuroSocket } from '../hooks/useNeuroSocket';
 import { useClickThrough } from '../hooks/useClickThrough';
 import { useDesktopNotification } from '../hooks/useDesktopNotification';
 import { useWakeWord } from '../hooks/useWakeWord';
+import { playTradeSignal, playRiskAlert, playChatNotification } from '../hooks/useSounds';
 import { getSavedModelId, saveModelId } from '../components/Live2D/modelRegistry';
+
+function formatTs(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function copyToClipboard(text) {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+}
+
+function KeyboardShortcuts({ chatOpen, setChatOpen, inputText, setInputText, handleSend, quickActions, handleQuickAction }) {
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape' && chatOpen) { setChatOpen(false); return; }
+      if (e.ctrlKey || e.metaKey) {
+        const num = parseInt(e.key);
+        if (num >= 1 && num <= 9 && num <= quickActions.length) {
+          e.preventDefault();
+          handleQuickAction(quickActions[num - 1]);
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (inputText.trim()) handleSend();
+          return;
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [chatOpen, setChatOpen, inputText, setInputText, handleSend, quickActions, handleQuickAction]);
+  return null;
+}
 
 const SECRET_PATTERNS = [
   { re: /(sk-[a-zA-Z0-9]{8,})/gi, label: 'API_KEY' },
@@ -115,6 +152,8 @@ export default function MainPage() {
   const chunksRef = useRef([]);
   const streamRef = useRef(null);
   const micTimerRef = useRef(null);
+
+  const msg = useCallback((type, content, extra = {}) => ({ type, content, ts: Date.now(), ...extra }), []);
 
   useClickThrough();
   const { notify } = useDesktopNotification();
@@ -418,9 +457,10 @@ export default function MainPage() {
         break;
       }
       case 'trade_signal': {
+        playTradeSignal();
         const actionEmoji = { BUY: '🟢', SELL: '🔴', HOLD: '🟡', WATCH: '👀' }[payload.action] || '⚪';
         const signalMsg = payload.message || `${actionEmoji} ${payload.name || ''}(${payload.symbol || ''}) ${payload.action || ''}`;
-        setMessages(prev => [...prev, { type: 'system', content: signalMsg }]);
+        setMessages(prev => [...prev, { type: 'system', content: signalMsg, ts: Date.now() }]);
         break;
       }
       case 'trade_analysis': {
@@ -453,9 +493,14 @@ export default function MainPage() {
       }
       case 'trade_result': {
         if (payload.ok) {
-          setMessages(prev => [...prev, { type: 'system', content: `✅ 交易提交成功: ${payload.action || ''} ${payload.name || payload.symbol || ''} ¥${payload.amount_cny || ''}` }]);
+          playTradeSignal();
         } else {
-          setMessages(prev => [...prev, { type: 'system', content: `🛑 交易被拦截: ${payload.reason || '风控不通过'}` }]);
+          playRiskAlert();
+        }
+        if (payload.ok) {
+          setMessages(prev => [...prev, { type: 'system', content: `✅ 交易提交成功: ${payload.action || ''} ${payload.name || payload.symbol || ''} ¥${payload.amount_cny || ''}`, ts: Date.now() }]);
+        } else {
+          setMessages(prev => [...prev, { type: 'system', content: `🛑 交易被拦截: ${payload.reason || '风控不通过'}`, ts: Date.now() }]);
         }
         break;
       }
@@ -1118,7 +1163,11 @@ case 'billing_renewal_payment': {
             </div>
           )}
           {messages.map((msg, i) => (
-            <div key={i} className={`chat-msg ${msg.type}`}>
+            <div key={msg._key || i} className={`chat-msg ${msg.type}`}
+              style={{ position: 'relative', cursor: 'pointer' }}
+              onClick={() => copyToClipboard(typeof msg.content === 'string' ? msg.content : '')}
+              title="点击复制">
+              <div style={{ fontSize: '10px', opacity: 0.4, marginBottom: 2 }}>{formatTs(msg.ts)}</div>
               {msg.type === 'image' && msg.content && msg.content.startsWith('data:image') ? (
                 <div>
                   <img src={msg.content} alt={msg.alt || 'QR Code'} style={{ maxWidth: '200px', borderRadius: '8px', cursor: 'pointer' }} onClick={() => window.open(msg.content, '_blank')} />
@@ -1217,6 +1266,17 @@ case 'billing_renewal_payment': {
           <DataPanel sendPacket={sendPacket} messages={messages} />
         </div>
       )}
+
+      {/* Keyboard shortcuts */}
+      <KeyboardShortcuts
+        chatOpen={chatOpen}
+        setChatOpen={setChatOpen}
+        inputText={inputText}
+        setInputText={setInputText}
+        handleSend={handleSend}
+        quickActions={QUICK_ACTIONS}
+        handleQuickAction={handleQuickAction}
+      />
     </div>
   );
 }

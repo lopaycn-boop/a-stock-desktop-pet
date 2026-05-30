@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('potatoAPI', {
   hideWindow: () => ipcRenderer.invoke('hide-window'),
   showWindow: () => ipcRenderer.invoke('show-window'),
   setOpacity: (opacity) => ipcRenderer.invoke('set-opacity', opacity),
+  getBounds: () => ipcRenderer.invoke('get-bounds'),
   powerStatus: () => ipcRenderer.invoke('power-status'),
   screenSources: () => ipcRenderer.invoke('screen-sources'),
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),

@@ -236,15 +236,36 @@ function _spawnBackend() {
   });
 }
 
+// ── Save/Restore window bounds ──
+const BOUNDS_FILE = path.join(app.getPath('userData'), 'window-bounds.json');
+
+function saveBounds() {
+  if (!mainWindow) return;
+  try {
+    const bounds = mainWindow.getBounds();
+    fs.writeFileSync(BOUNDS_FILE, JSON.stringify(bounds), 'utf8');
+  } catch (e) {}
+}
+
+function loadBounds() {
+  try {
+    if (fs.existsSync(BOUNDS_FILE)) {
+      return JSON.parse(fs.readFileSync(BOUNDS_FILE, 'utf8'));
+    }
+  } catch (e) {}
+  return null;
+}
+
 // ── Create main window ──
 function createWindow() {
   const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize;
+  const savedBounds = loadBounds();
 
   mainWindow = new BrowserWindow({
-    width: 420,
-    height: 700,
-    x: screenW - 440,
-    y: screenH - 720,
+    width: savedBounds?.width || 420,
+    height: savedBounds?.height || 700,
+    x: savedBounds?.x ?? (screenW - 440),
+    y: savedBounds?.y ?? (screenH - 720),
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -295,9 +316,13 @@ function createWindow() {
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault();
+      saveBounds();
       mainWindow.hide();
     }
   });
+
+  mainWindow.on('moved', () => saveBounds());
+  mainWindow.on('resized', () => saveBounds());
 
   // Register global shortcuts
   globalShortcut.register('CommandOrControl+Shift+P', () => {
@@ -546,6 +571,11 @@ function setupIPC() {
   ipcMain.handle('set-opacity', async (event, opacity) => {
     mainWindow?.setOpacity(Math.max(0.1, Math.min(1, opacity)));
     return { ok: true };
+  });
+
+  ipcMain.handle('get-bounds', async () => {
+    if (!mainWindow) return { ok: false };
+    return { ok: true, ...mainWindow.getBounds() };
   });
 
   ipcMain.handle('power-status', async () => {
