@@ -1,6 +1,6 @@
 """Version information for 小土豆 AI操盘桌宠."""
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 __author__ = "自由的风"
 BUILD = "20250530"
 
@@ -17,4 +17,5 @@ FEATURES = [
     "risk_control_ui", "chat_export", "sound_volume_control", "tts_mute",
     "emotion_engine", "trade_history_panel", "onboarding_wizard",
     "multiline_input", "scroll_to_bottom", "memory_sidebar",
+    "chat_persistence", "message_rendering", "reconnect_retry",
 ]

@@ -17,6 +17,8 @@ import { useDesktopNotification } from '../hooks/useDesktopNotification';
 import { useWakeWord } from '../hooks/useWakeWord';
 import { playTradeSignal, playRiskAlert, playChatNotification } from '../hooks/useSounds';
 import { inferEmotionFromMessage, emotionToExpression, stateToExpression } from '../hooks/useEmotionEngine';
+import { usePersistentMessages } from '../hooks/usePersistentMessages';
+import { renderMessageContent } from '../hooks/useMessageRenderer.jsx';
 import { getSavedModelId, saveModelId } from '../components/Live2D/modelRegistry';
 
 function formatTs(ts) {
@@ -136,7 +138,7 @@ const QUICK_ACTIONS = [
 ];
 
 export default function MainPage() {
-  const [messages, setMessages] = useState([]);
+  const { messages, setMessages, clearMessages } = usePersistentMessages();
   const [neuroState, setNeuroState] = useState("idle");
   const [inputText, setInputText] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
@@ -1189,6 +1191,7 @@ case 'billing_renewal_payment': {
             </button>
           </div>
           <button className="close-btn" onClick={() => setChatOpen(false)}>✕</button>
+            <button onClick={clearMessages} title="清空聊天记录" style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>🗑️</button>
         </div>
 
         <div className="chat-quick">
@@ -1199,8 +1202,9 @@ case 'billing_renewal_payment': {
 
         <div className="chat-msgs" ref={chatMessagesRef} onScroll={handleChatScroll}>
           {!connected && (
-            <div style={{ position: 'sticky', top: 0, zIndex: 10, background: 'rgba(255,82,82,0.15)', borderBottom: '1px solid rgba(255,82,82,0.3)', color: '#ff8a80', textAlign: 'center', fontSize: 12, padding: '6px', backdropFilter: 'blur(8px)' }}>
+            <div style={{ position: 'sticky', top: 0, zIndex: 10, background: 'rgba(255,82,82,0.15)', borderBottom: '1px solid rgba(255,82,82,0.3)', color: '#ff8a80', textAlign: 'center', fontSize: 12, padding: '6px', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
               ⚠️ 连接断开，正在重连...
+              <button onClick={() => window.location.reload()} style={{ background: 'rgba(255,82,82,0.2)', border: '1px solid rgba(255,82,82,0.4)', borderRadius: 6, color: '#ff8a80', padding: '2px 10px', cursor: 'pointer', fontSize: 11 }}>🔄 刷新</button>
             </div>
           )}
           {neuroState === 'thinking' && chatOpen && (
@@ -1244,14 +1248,16 @@ case 'billing_renewal_payment': {
                   <img src={msg.content} alt={msg.alt || 'QR Code'} style={{ maxWidth: '200px', borderRadius: '8px', cursor: 'pointer' }} onClick={() => window.open(msg.content, '_blank')} />
                   {msg.alt && <div style={{ fontSize: '11px', color: '#888', marginTop: '4px' }}>{msg.alt}</div>}
                 </div>
-              ) : msg.type === 'system' && msg.content.includes('录音中') ? (
-                <>
-                  {msg.content}
-                  <div className="voice-bars">
-                    <div className="bar" /><div className="bar" /><div className="bar" /><div className="bar" /><div className="bar" />
-                  </div>
-                </>
-              ) : msg.content}
+) : msg.type === 'system' && msg.content.includes('录音中') ? (
+                 <>
+                   {msg.content}
+                   <div className="voice-bars">
+                     <div className="bar" /><div className="bar" /><div className="bar" /><div className="bar" /><div className="bar" />
+                   </div>
+                 </>
+               ) : (msg.type === 'system' || msg.type === 'assistant') && typeof msg.content === 'string' && msg.content.includes('\n') ? (
+                 renderMessageContent(msg.content)
+               ) : msg.content}
               {msg.image && (msg.image.startsWith('data:image/') || msg.image.startsWith('/9j/')) && (
                 <img src={msg.image} alt="screenshot" className="chat-screenshot" />
               )}
@@ -1376,11 +1382,6 @@ case 'billing_renewal_payment': {
           onClose={() => setShowTradeHistory(false)}
           sendPacket={sendPacket}
           messages={messages}
-        />
-      )}
-          }}
-          messages={messages}
-          sendPacket={sendPacket}
         />
       )}
 

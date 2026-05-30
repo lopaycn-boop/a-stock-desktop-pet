@@ -2,6 +2,20 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.8.0] - 2025-05-30
+
+### New Features
+- **Chat History Persistence**: Conversations survive page reloads — last 200 messages auto-saved to localStorage
+- **Clear Chat Button**: 🗑️ button in chat header to clear history
+- **Message Formatting**: Multi-line analysis/ Trade review messages now render with proper line breaks, bold headers, bullets, and numbered items
+- **Reconnect + Refresh**: Disconnection banner now includes a "🔄 刷新" retry button
+
+### UX
+- `usePersistentMessages` hook: localStorage-backed state, max 200 messages, auto-trim
+- `useMessageRenderer.jsx`: Smart rendering of system/assistant messages with markdown-like formatting
+- Chat input now a growing textarea with Shift+Enter for newlines
+- 204 tests passing, 48 features
+
 ## [1.7.0] - 2025-05-30
 
 ### UX Improvements
