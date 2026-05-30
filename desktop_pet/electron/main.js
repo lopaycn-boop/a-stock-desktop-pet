@@ -109,7 +109,7 @@ function findPython() {
 
   for (const p of candidates) {
     try {
-      const result = spawn(p, ['--version'], { stdio: 'pipe' });
+      const result = spawn(p, ['--version'], { stdio: 'pipe', shell: true });
       if (result.status === 0) return p;
     } catch(e) {}
   }
@@ -162,7 +162,7 @@ function _spawnAgent() {
     cwd: path.dirname(agentScript),
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: false,
+    shell: true,
   });
   agentProc.stdout.on('data', (data) => {
     console.log(`[agent] ${data.toString().trim()}`);
@@ -187,9 +187,12 @@ function _spawnBackend() {
   const backendDir = path.join(process.resourcesPath || path.join(__dirname, '..'), 'backend');
   const mainPy = path.join(backendDir, 'main.py');
 
+  console.log(`[electron] _spawnBackend: python=${python}, mainPy=${mainPy}, exists=${fs.existsSync(mainPy)}`);
+
   if (!fs.existsSync(mainPy)) {
     console.error(`Backend not found at ${mainPy}, trying project root backend`);
     const altMainPy = path.join(__dirname, '..', 'backend', 'main.py');
+    console.log(`[electron] altMainPy=${altMainPy}, exists=${fs.existsSync(altMainPy)}`);
     if (!fs.existsSync(altMainPy)) {
       console.error(`Backend not found at ${altMainPy} either, relying on existing backend`);
       return;
@@ -212,7 +215,7 @@ function _spawnBackend() {
     cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: false,
+    shell: true,
   });
 
   backendProc.stdout.on('data', (data) => {

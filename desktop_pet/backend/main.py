@@ -911,6 +911,13 @@ async def websocket_endpoint(websocket: WebSocket):
             elif msg_type == "iwencai_search":
                 await handle_iwencai_search(payload, send_to_frontend)
 
+            elif msg_type == "trendradar_trending":
+                await handle_trendradar_trending(payload, send_to_frontend)
+            elif msg_type == "trendradar_search":
+                await handle_trendradar_search(payload, send_to_frontend)
+            elif msg_type == "trendradar_sentiment":
+                await handle_trendradar_sentiment(payload, send_to_frontend)
+
             else:
                 logger.warning("Unknown msg_type from frontend: %s", msg_type)
                 await send_to_frontend("error", {"info": f"未知消息类型: {msg_type}"})
@@ -3646,5 +3653,55 @@ async def handle_iwencai_search(payload: dict, send_func):
         text = format_iwencai_to_text(result)
         await send_func("iwencai_search", {"keyword": keyword, "channel": channel, "result": result, "text": text})
         await send_reply(f"📰 {text[:300]}", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+# ── TrendRadar handlers ──────────────────────────────────────────────
+
+async def handle_trendradar_trending(payload: dict, send_func):
+    platforms = payload.get("platforms", None)
+    limit = min(int(payload.get("limit", 20)), 100)
+    try:
+        from potato.trendradar import trending
+        result = await asyncio.to_thread(trending, platforms, limit)
+        await send_func("trendradar_trending", result)
+        count = result.get("count", 0)
+        names = "、".join(list(result.get("platforms", {}).values())[:4])
+        await send_reply(f"🔥 热点监控: {names}等{count}条热点", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_trendradar_search(payload: dict, send_func):
+    keyword = payload.get("keyword", "")
+    if not keyword:
+        await send_func("error", {"info": "请输入搜索关键词"})
+        return
+    if len(keyword) > 200:
+        await send_func("error", {"info": "关键词长度需在1-200字符之间"})
+        return
+    platforms = payload.get("platforms", None)
+    limit = min(int(payload.get("limit", 20)), 100)
+    try:
+        from potato.trendradar import search
+        result = await asyncio.to_thread(search, keyword, platforms, limit)
+        await send_func("trendradar_search", result)
+        count = result.get("count", 0)
+        await send_reply(f"🔍 热点搜索「{keyword[:20]}」: 找到{count}条", "neutral", send_func)
+    except Exception as e:
+        await send_func("error", {"info": _safe_error(e)})
+
+
+async def handle_trendradar_sentiment(payload: dict, send_func):
+    platforms = payload.get("platforms", None)
+    try:
+        from potato.trendradar import sentiment_summary
+        result = await asyncio.to_thread(sentiment_summary, platforms)
+        await send_func("trendradar_sentiment", result)
+        total = result.get("total_topics", 0)
+        finance = result.get("total_finance_related", 0)
+        ratio = result.get("finance_ratio", 0)
+        await send_reply(f"📊 热点舆情: {total}条热点, 金融相关{finance}条({ratio}%)", "neutral", send_func)
     except Exception as e:
         await send_func("error", {"info": _safe_error(e)})

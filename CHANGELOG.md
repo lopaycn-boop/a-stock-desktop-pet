@@ -2,6 +2,22 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.1.0] - 2025-05-30
+
+### New Feature: TrendRadar 舆情热点插件
+- **trendradar_trending**: 多平台热点监控 — 微博/百度/知乎/抖音/头条/B站/36氪等15个平台实时热搜
+- **trendradar_search**: 关键词搜索 — 跨平台搜索热点新闻，支持高/中相关度标记
+- **trendradar_sentiment**: 舆情分析 — 金融相关热点自动识别、占比统计、各平台热度排名
+- 公共NewsNow API数据源，无需额外API Key
+- 5分钟本地缓存，减少重复请求
+- WS实时推送 + 小土豆智能播报
+
+### Bug Fixes
+- Fix Electron spawn: restore `shell: true` (Windows中文路径需要)
+- Fix `findPython`: add `shell: true` for Python version detection
+- Add debug logging for backend spawn path resolution
+- 204 pytest all green
+
 ## [1.0.2] - 2025-05-30
 
 ### Security Fixes
