@@ -28,9 +28,13 @@ import MessageActions from '../components/MessageActions';
 import ChatSearch from '../components/ChatSearch';
 import CommandPalette from '../components/CommandPalette';
 import ChatMessage from '../components/ChatMessage';
+import KeyboardHelp from '../components/KeyboardHelp';
+import ContextMenu from '../components/ContextMenu';
+import DropOverlay from '../components/DropOverlay';
 import useI18n from '../hooks/useI18n';
 import useTheme from '../hooks/useTheme';
 import useChatResize from '../hooks/useChatResize';
+import useTooltip from '../hooks/useTooltip.jsx';
 
 function formatTs(ts) {
   if (!ts) return '';
@@ -44,7 +48,7 @@ function copyToClipboard(text) {
   }
 }
 
-function KeyboardShortcuts({ chatOpen, setChatOpen, inputText, setInputText, handleSend, quickActions, handleQuickAction }) {
+function KeyboardShortcuts({ chatOpen, setChatOpen, inputText, setInputText, handleSend, quickActions, handleQuickAction, setShowKeyboardHelp, setShowChatSearch, cycleTheme, switchLang, isZh, handleExportChat }) {
   useEffect(() => {
     const handler = (e) => {
       if (e.key === 'Escape' && chatOpen) { setChatOpen(false); return; }
@@ -60,11 +64,20 @@ function KeyboardShortcuts({ chatOpen, setChatOpen, inputText, setInputText, han
           if (inputText.trim()) handleSend();
           return;
         }
+        if (e.key === 'l') { e.preventDefault(); switchLang(isZh ? 'en' : 'zh'); return; }
+        if (e.key === 'd') { e.preventDefault(); cycleTheme(); return; }
+        if (e.key === 'f') { e.preventDefault(); setShowChatSearch(s => !s); return; }
+        if (e.key === 'e') { e.preventDefault(); handleExportChat(); return; }
+      }
+      if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const tag = e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        setShowKeyboardHelp(s => !s);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [chatOpen, setChatOpen, inputText, setInputText, handleSend, quickActions, handleQuickAction]);
+  }, [chatOpen, setChatOpen, inputText, setInputText, handleSend, quickActions, handleQuickAction, setShowKeyboardHelp, setShowChatSearch, cycleTheme, switchLang, isZh, handleExportChat]);
   return null;
 }
 
@@ -153,7 +166,10 @@ export default function MainPage() {
   const { t, lang, switchLang, isZh } = useI18n();
   const { theme, effectiveTheme, cycleTheme } = useTheme();
   const { width: chatWidth, resizeHandleProps, isDragging } = useChatResize(380);
+  const { show: showTooltip, hide: hideTooltip, TooltipOverlay } = useTooltip();
   const [showChatSearch, setShowChatSearch] = useState(false);
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
+  const [contextMenu, setContextMenu] = useState(null);
   const [neuroState, setNeuroState] = useState("idle");
   const [inputText, setInputText] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
@@ -958,6 +974,21 @@ case 'billing_renewal_payment': {
     setShowScrollBottom(distFromBottom > 80);
   }, []);
 
+  const handleContextMenu = useCallback((e) => {
+    e.preventDefault();
+    const items = [
+      { icon: '📋', label: '粘贴并发送', shortcut: 'Ctrl+V', action: () => { navigator.clipboard.readText().then(t => { if (t?.trim()) { sendPacket({ type: 'text_input', payload: { text: t.trim() } }); setChatOpen(true); } }); }},
+      { icon: '🔍', label: '搜索聊天', shortcut: 'Ctrl+F', action: () => setShowChatSearch(true) },
+      { icon: '💾', label: '导出聊天', shortcut: 'Ctrl+E', action: handleExportChat },
+      { sep: true },
+      { icon: '🌙', label: effectiveTheme === 'dark' ? '切换浅色' : '切换深色', shortcut: 'Ctrl+D', action: cycleTheme },
+      { icon: '🌐', label: isZh ? 'Switch to English' : '切换到中文', shortcut: 'Ctrl+L', action: () => switchLang(isZh ? 'en' : 'zh') },
+      { sep: true },
+      { icon: '⌨️', label: '快捷键帮助', shortcut: '?', action: () => setShowKeyboardHelp(true) },
+    ];
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
+  }, [sendPacket, effectiveTheme, isZh, cycleTheme, switchLang, handleExportChat]);
+
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     setShowScrollBottom(false);
@@ -1239,7 +1270,10 @@ case 'billing_renewal_payment': {
     >
     <ToastContainer />
     <CommandPalette
-      onSend={(msg) => { sendPacket({ type: 'text_input', payload: { text: msg } }); setChatOpen(true); }}
+      onSend={(msg) => {
+        if (msg.startsWith('__')) { handleQuickAction({ msg }); }
+        else { sendPacket({ type: 'text_input', payload: { text: msg } }); setChatOpen(true); }
+      }}
       onAction={handleCommandAction}
       lang={isZh ? 'zh' : 'en'}
     />
@@ -1269,7 +1303,7 @@ case 'billing_renewal_payment': {
       </div>
 
       {/* 聊天浮窗：左侧 */}
-      <div className={`chat-card ${chatOpen ? 'visible' : 'hidden'}`} style={{ width: chatWidth, transition: isDragging?.current ? 'none' : 'width 0.2s' }}>
+      <div className={`chat-card ${chatOpen ? 'visible' : 'hidden'}`} style={{ width: chatWidth, transition: isDragging?.current ? 'none' : 'width 0.2s' }} onContextMenu={handleContextMenu}>
         <div className="chat-resize-handle" {...resizeHandleProps} style={{ position: 'absolute', top: 0, bottom: 0, right: 0, width: 6, cursor: 'ew-resize', zIndex: 10 }} />
         <div className="chat-card-head">
           <div className="head-left">
@@ -1531,6 +1565,12 @@ case 'billing_renewal_payment': {
         handleSend={handleSend}
         quickActions={QUICK_ACTIONS}
         handleQuickAction={handleQuickAction}
+        setShowKeyboardHelp={setShowKeyboardHelp}
+        setShowChatSearch={setShowChatSearch}
+        cycleTheme={cycleTheme}
+        switchLang={switchLang}
+        isZh={isZh}
+handleExportChat={handleExportChat}
       />
 
       {showOnboarding && (
@@ -1539,6 +1579,36 @@ case 'billing_renewal_payment': {
           sendPacket={sendPacket}
         />
       )}
+
+      {showKeyboardHelp && (
+        <KeyboardHelp lang={isZh ? 'zh' : 'en'} onClose={() => setShowKeyboardHelp(false)} />
+      )}
+
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x} y={contextMenu.y}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
+          lang={isZh ? 'zh' : 'en'}
+        />
+      )}
+
+      <DropOverlay
+        onDrop={(text) => {
+          const detected = detectKey(text);
+          if (detected) {
+            sendPacket({ type: 'vault_store', payload: { key: detected.key, value: detected.value } });
+            setMessages(prev => [...prev, { type: 'system', content: `🔐 拖入密钥 ${detected.key}，正在保存...` }]);
+            showToast(`${detected.key} 已识别`, 'success');
+          } else {
+            setMessages(prev => [...prev, { type: 'user', content: text.slice(0, 200) }]);
+            sendPacket({ type: 'text_input', payload: { text: text.slice(0, 500) } });
+          }
+        }}
+        lang={isZh ? 'zh' : 'en'}
+      />
+
+      {TooltipOverlay}
     </div>
     </ErrorBoundary>
   );

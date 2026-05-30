@@ -2,6 +2,21 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.13.0] - 2025-05-30
+
+### New Features
+- **Keyboard Help** (? key): Full overlay listing all shortcuts — Ctrl+K/F/D/L/E, Esc, etc.
+- **Context Menu**: Right-click chat area for quick actions (paste+send, search, export, theme, lang, help)
+- **Drag & Drop**: Drop API keys or text files onto the app to auto-detect and save
+- **Tooltip System**: `useTooltip` hook with consistent hover-delay tooltips across UI
+- **Extended Shortcuts**: Ctrl+L (lang), Ctrl+D (theme), Ctrl+F (search), Ctrl+E (export), ? (help)
+- **66 total features registered**
+
+### UX
+- Drop overlay shows 🔓 icon and instructions when dragging text/files
+- Context menu supports keyboard navigation (↑↓ arrows, Enter, Esc)
+- Command palette routes `__` prefixed commands through handleQuickAction
+
 ## [1.12.0] - 2025-05-30
 
 ### New Features
