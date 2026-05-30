@@ -738,9 +738,13 @@ case 'billing_renewal_payment': {
     }
   }, [queueAudioChunk]);
 
+  const BACKEND_PORT = typeof window !== 'undefined' && window.__BACKEND_PORT__
+    ? window.__BACKEND_PORT__
+    : (window.location.port && !['5173','5174','3000'].includes(window.location.port)
+      ? window.location.port : '8000');
   const WS_URL = typeof window !== 'undefined'
-    ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:8000/ws`
-    : 'ws://127.0.0.1:8000/ws';
+    ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:${BACKEND_PORT}/ws`
+    : 'ws://127.0.0.1:8080/ws';
   const { sendPacket, connected } = useNeuroSocket(WS_URL, handleServerPacket);
 
   const prevConnectedRef = useRef(connected);
@@ -750,7 +754,7 @@ case 'billing_renewal_payment': {
         setMessages(prev => [...prev, { type: 'system', content: '✅ 连接已恢复' }]);
       }
       sendPacket({ type: 'vault_status', payload: {} });
-      fetch(`http://${window.location.hostname}:8000/health`).then(r => r.json()).then(setSystemStatus).catch(() => {});
+      fetch(`http://${window.location.hostname}:${BACKEND_PORT}/health`).then(r => r.json()).then(setSystemStatus).catch(() => {});
     } else {
       if (prevConnectedRef.current === true) {
         setMessages(prev => [...prev, { type: 'system', content: '⚠️ 与服务器断开连接，正在重连...' }]);

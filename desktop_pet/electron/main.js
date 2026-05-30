@@ -10,7 +10,7 @@ let tray = null;
 let backendProc = null;
 let isQuitting = false;
 
-const BACKEND_PORT = 8000;
+const BACKEND_PORT = parseInt(process.env.PET_BACKEND_PORT || '8000', 10);
 const FRONTEND_PORT = 5173;
 const APP_NAME = '小土豆 AI操盘桌宠';
 
@@ -70,6 +70,28 @@ function waitForBackend(port, maxRetries = 30) {
       req.end();
     };
     check();
+  });
+}
+
+function findBackendPort(startPort = 8000, maxTries = 10) {
+  return new Promise((resolve) => {
+    let port = startPort;
+    const tryPort = () => {
+      if (port >= startPort + maxTries) { resolve(startPort); return; }
+      const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
+        res.resume();
+        if (res.statusCode === 200) {
+          console.log(`[electron] Found backend on port ${port}`);
+          resolve(port);
+        } else {
+          port++;
+          tryPort();
+        }
+      });
+      req.on('error', () => { resolve(startPort); });
+      req.end();
+    };
+    tryPort();
   });
 }
 
@@ -461,14 +483,27 @@ app.whenReady().then(async () => {
   // Start backend first
   startBackend();
 
-  // Wait for backend to be ready
+  // Wait for backend to be ready and find its actual port
+  let actualPort = BACKEND_PORT;
   const backendReady = await waitForBackend(BACKEND_PORT, 30);
   if (!backendReady) {
+    // Try alternate ports
+    for (let altPort = 8001; altPort < 8010; altPort++) {
+      const altReady = await waitForBackend(altPort, 3);
+      if (altReady) {
+        actualPort = altPort;
+        console.log(`[electron] Backend found on alternate port ${altPort}`);
+        break;
+      }
+    }
+  }
+  if (!backendReady && actualPort === BACKEND_PORT) {
     console.error('Backend failed to start within 30s');
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('system-event', { type: 'backend_timeout' });
     }
   } else {
+    BACKEND_PORT = actualPort;
     // Run verification check
     try {
       const verifyReq = http.get(`http://127.0.0.1:${BACKEND_PORT}/verify`, (vRes) => {
@@ -493,8 +528,12 @@ app.whenReady().then(async () => {
   // Start Bytebot Agent
   startBytebotAgent();
 
-  // Create UI
+  // Create UI with backend port info
   createWindow();
+  // Inject backend port into frontend so it knows where to connect
+  if (mainWindow && BACKEND_PORT !== 8000) {
+    mainWindow.webContents.executeJavaScript(`window.__BACKEND_PORT__ = ${BACKEND_PORT};`);
+  }
   createTray();
   setupIPC();
 

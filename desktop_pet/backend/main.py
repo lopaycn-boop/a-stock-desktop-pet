@@ -3306,12 +3306,28 @@ async def handle_plan_execute_analysis(payload: dict, send_func):
         await send_func("state_update", {"state": "idle"})
 
 
+def _find_available_port(start=8000, max_tries=10):
+    import socket
+    for port in range(start, start + max_tries):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", port))
+                return port
+        except OSError:
+            continue
+    return start
+
+
 if __name__ == "__main__":
-    import uvicorn
+    import socket
+    preferred_port = int(os.getenv("PORT", "8000"))
+    port = _find_available_port(preferred_port)
+    if port != preferred_port:
+        logger.warning("Port %d busy, using %d instead", preferred_port, port)
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "8000")),
+        port=port,
         lifespan="on",
         loop="asyncio",
         log_level="info",
