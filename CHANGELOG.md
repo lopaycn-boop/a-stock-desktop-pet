@@ -2,6 +2,19 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.9.0] - 2025-05-30
+
+### New Features
+- **Error Boundary**: React error boundary catches UI crashes, shows recovery UI (reset/refresh) instead of white screen
+- **Splash Screen**: Animated loading screen on startup (🥔 init → backend → ws → live2d → ready) with progress bar
+- **Internationalization (i18n)**: 🌐 language toggle in chat header (中文/English), 48+ translation keys, `useI18n` hook + `locales.js`
+- **51 total features registered**
+
+### UX
+- Error boundary wraps entire app — any crash shows potato-themed recovery page
+- Splash auto-dismisses after 2.2s
+- i18n state persisted in `localStorage` key `potato_lang`
+
 ## [1.8.0] - 2025-05-30
 
 ### New Features

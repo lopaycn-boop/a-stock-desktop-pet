@@ -20,6 +20,9 @@ import { inferEmotionFromMessage, emotionToExpression, stateToExpression } from 
 import { usePersistentMessages } from '../hooks/usePersistentMessages';
 import { renderMessageContent } from '../hooks/useMessageRenderer.jsx';
 import { getSavedModelId, saveModelId } from '../components/Live2D/modelRegistry';
+import ErrorBoundary from '../components/ErrorBoundary';
+import SplashScreen from '../components/SplashScreen';
+import useI18n from '../hooks/useI18n';
 
 function formatTs(ts) {
   if (!ts) return '';
@@ -139,6 +142,7 @@ const QUICK_ACTIONS = [
 
 export default function MainPage() {
   const { messages, setMessages, clearMessages } = usePersistentMessages();
+  const { t, lang, switchLang, isZh } = useI18n();
   const [neuroState, setNeuroState] = useState("idle");
   const [inputText, setInputText] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
@@ -160,6 +164,7 @@ export default function MainPage() {
   });
   const [alwaysOnTop, setAlwaysOnTop] = useState(true);
   const [systemStatus, setSystemStatus] = useState(null);
+  const [splashStage, setSplashStage] = useState('init');
   const messagesEndRef = useRef(null);
   const chatMessagesRef = useRef(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
@@ -872,6 +877,16 @@ case 'billing_renewal_payment': {
   }, [connected]);
 
   useEffect(() => {
+    const timers = [
+      setTimeout(() => setSplashStage('backend'), 300),
+      setTimeout(() => setSplashStage('ws'), 800),
+      setTimeout(() => setSplashStage('live2d'), 1400),
+      setTimeout(() => setSplashStage(null), 2200),
+    ];
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
+  useEffect(() => {
     const handler = (action) => {
       if (action === 'trade_analysis') {
         setChatOpen(true);
@@ -1137,7 +1152,16 @@ case 'billing_renewal_payment': {
     }
   }, [neuroState, currentModel]);
 
+  if (splashStage) {
+    const progressMap = { init: 10, backend: 30, ws: 60, live2d: 85, ready: 100 };
+    return <SplashScreen stage={splashStage} progress={progressMap[splashStage] || 0} />;
+  }
+
   return (
+    <ErrorBoundary
+      fallbackTitle={t('error_boundary.title')}
+      fallbackMessage={t('error_boundary.message')}
+    >
     <div className="app">
       {/* 桌宠：全屏 */}
       <div className="pet-layer">
@@ -1192,6 +1216,7 @@ case 'billing_renewal_payment': {
           </div>
           <button className="close-btn" onClick={() => setChatOpen(false)}>✕</button>
             <button onClick={clearMessages} title="清空聊天记录" style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>🗑️</button>
+            <button onClick={() => switchLang(isZh ? 'en' : 'zh')} title={isZh ? 'Switch to English' : '切换到中文'} style={{ background: 'none', border: 'none', color: isZh ? '#69f0ae' : '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>🌐</button>
         </div>
 
         <div className="chat-quick">
@@ -1403,5 +1428,6 @@ case 'billing_renewal_payment': {
         />
       )}
     </div>
+    </ErrorBoundary>
   );
 }
