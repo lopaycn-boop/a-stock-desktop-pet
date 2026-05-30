@@ -1694,7 +1694,7 @@ async def _process_ai_actions(actions: dict, send_func):
 
 _SANITIZE_PATTERNS = [
     (re.compile(r'(sk-[a-zA-Z0-9]{4})[a-zA-Z0-9]{12,}([a-zA-Z0-9]{4})'), r'\1***\2'),
-    (re.compile(r'(TLyD5v9e)[a-zA-Z0-9]{10,}([a-zA-Z0-9]{4})'), r'\1***\2'),
+    (re.compile(r'(T[A-Za-z0-9]{4})[a-zA-Z0-9]{10,}([a-zA-Z0-9]{4})'), r'\1***\2'),
     (re.compile(r'(password|passwd|pwd|token|secret|api_key|apikey|api_secret|access_key|private_key|auth_key)\s*[:=]\s*["\']?[a-zA-Z0-9_\-]{8,}["\']?', re.I), r'\1=***'),
     (re.compile(r'(Bearer\s+)[a-zA-Z0-9_\-\.]{20,}', re.I), r'\1***'),
     (re.compile(r'(https?://[^\s/]+[^\s]*?:[^\s/]+?@)', re.I), r'https://***@'),
