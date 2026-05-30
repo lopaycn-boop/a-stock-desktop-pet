@@ -40,6 +40,8 @@ import PortfolioDashboard from '../components/PortfolioDashboard';
 import StrategyEditor from '../components/StrategyEditor';
 import ModelSwitcherPanel from '../components/ModelSwitcherPanel';
 import useTypingEffect from '../hooks/useTypingEffect';
+import VoiceWaveform from '../components/VoiceWaveform';
+import StatusBar from '../components/StatusBar';
 
 function formatTs(ts) {
   if (!ts) return '';
@@ -1479,7 +1481,10 @@ case 'billing_renewal_payment': {
           )}
         </div>
 
+        <StatusBar systemStatus={systemStatus} connected={connected} currentModel={currentModel} lang={isZh ? 'zh' : 'en'} />
+
         <div className="chat-input-row">
+          {recording && <VoiceWaveform isRecording={recording} onStop={() => setRecording(false)} />}
           <textarea
             value={inputText}
             onChange={e => setInputText(e.target.value)}

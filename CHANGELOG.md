@@ -2,6 +2,20 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.16.0] - 2025-05-30
+
+### New Features
+- **Voice Waveform**: Canvas-based real-time audio waveform visualization during recording, volume bar, stop button
+- **Status Bar**: Connection status, key count, current model, uptime, real-time clock
+- **Typing Effect**: AI responses >50 chars stream character-by-character
+- **Enhanced Tray Menu Template**: i18n menu with market/analysis/portfolio/pick/review/balance
+- **74 total features registered**
+
+### UX
+- Waveform shows 24 frequency bars with gradient coloring
+- Status bar auto-updates every second
+- Idle waveform animation when not recording
+
 ## [1.15.0] - 2025-05-30
 
 ### New Features
