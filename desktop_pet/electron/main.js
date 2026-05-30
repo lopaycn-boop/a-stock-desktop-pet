@@ -10,7 +10,7 @@ let tray = null;
 let backendProc = null;
 let isQuitting = false;
 
-const BACKEND_PORT = parseInt(process.env.PET_BACKEND_PORT || '8000', 10);
+let BACKEND_PORT = parseInt(process.env.PET_BACKEND_PORT || '8000', 10);
 const FRONTEND_PORT = 5173;
 const APP_NAME = '小土豆 AI操盘桌宠';
 
@@ -266,6 +266,16 @@ function createWindow() {
         el.style['-webkit-app-region'] = 'no-drag';
       });
     `);
+    // Inject backend port so frontend WS connects to the right port
+    if (BACKEND_PORT !== 8000) {
+      mainWindow.webContents.executeJavaScript(`
+        if (typeof window.__BACKEND_PORT__ === 'undefined' || window.__BACKEND_PORT__ !== ${BACKEND_PORT}) {
+          window.__BACKEND_PORT__ = ${BACKEND_PORT};
+          console.log('[electron] Backend port set to ${BACKEND_PORT}');
+          window.dispatchEvent(new CustomEvent('backend-port-ready', { detail: ${BACKEND_PORT} }));
+        }
+      `);
+    }
   });
 
   // Load frontend
@@ -530,10 +540,6 @@ app.whenReady().then(async () => {
 
   // Create UI with backend port info
   createWindow();
-  // Inject backend port into frontend so it knows where to connect
-  if (mainWindow && BACKEND_PORT !== 8000) {
-    mainWindow.webContents.executeJavaScript(`window.__BACKEND_PORT__ = ${BACKEND_PORT};`);
-  }
   createTray();
   setupIPC();
 

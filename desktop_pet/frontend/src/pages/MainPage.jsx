@@ -738,14 +738,23 @@ case 'billing_renewal_payment': {
     }
   }, [queueAudioChunk]);
 
-  const BACKEND_PORT = typeof window !== 'undefined' && window.__BACKEND_PORT__
-    ? window.__BACKEND_PORT__
-    : (window.location.port && !['5173','5174','3000'].includes(window.location.port)
-      ? window.location.port : '8000');
-  const WS_URL = typeof window !== 'undefined'
-    ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:${BACKEND_PORT}/ws`
-    : 'ws://127.0.0.1:8080/ws';
-  const { sendPacket, connected } = useNeuroSocket(WS_URL, handleServerPacket);
+  const [backendPort, setBackendPort] = useState(() => {
+    if (typeof window !== 'undefined' && window.__BACKEND_PORT__) return window.__BACKEND_PORT__;
+    if (typeof window !== 'undefined' && window.location.port && !['5173','5174','3000'].includes(window.location.port)) return window.location.port;
+    return 8000;
+  });
+
+  useEffect(() => {
+    const onPortReady = (e) => setBackendPort(e.detail);
+    window.addEventListener('backend-port-ready', onPortReady);
+    return () => window.removeEventListener('backend-port-ready', onPortReady);
+  }, []);
+
+  const BACKEND_PORT = backendPort;
+  const WS_URL = `://${window.location.hostname}:${BACKEND_PORT}/ws`;
+  const wsProto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const fullWsUrl = typeof window !== 'undefined' ? `${wsProto}${WS_URL}` : 'ws://127.0.0.1:8000/ws';
+  const { sendPacket, connected } = useNeuroSocket(fullWsUrl, handleServerPacket);
 
   const prevConnectedRef = useRef(connected);
   useEffect(() => {
@@ -754,7 +763,7 @@ case 'billing_renewal_payment': {
         setMessages(prev => [...prev, { type: 'system', content: '✅ 连接已恢复' }]);
       }
       sendPacket({ type: 'vault_status', payload: {} });
-      fetch(`http://${window.location.hostname}:${BACKEND_PORT}/health`).then(r => r.json()).then(setSystemStatus).catch(() => {});
+      fetch(`http://${window.location.hostname}:${backendPort}/health`).then(r => r.json()).then(setSystemStatus).catch(() => {});
     } else {
       if (prevConnectedRef.current === true) {
         setMessages(prev => [...prev, { type: 'system', content: '⚠️ 与服务器断开连接，正在重连...' }]);
