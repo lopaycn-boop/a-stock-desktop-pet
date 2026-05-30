@@ -14,7 +14,9 @@ from typing import Any, Optional
 
 logger = logging.getLogger("potato.browser")
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "browser_profiles"
+from potato.paths import DATA_DIR as _ROOT_DATA_DIR
+
+browser_profiles_dir = _ROOT_DATA_DIR / "browser_profiles"
 
 try:
     from playwright.async_api import Browser, BrowserContext, Page, async_playwright
@@ -92,7 +94,7 @@ class BrowserEngine:
         if platform_id in self._contexts:
             return self._contexts[platform_id]
 
-        profile_dir = DATA_DIR / platform_id
+        profile_dir = browser_profiles_dir / platform_id
         profile_dir.mkdir(parents=True, exist_ok=True)
 
         ctx = await self._browser.new_context(
@@ -115,7 +117,7 @@ class BrowserEngine:
         ctx = self._contexts.get(platform_id)
         if not ctx:
             return
-        profile_dir = DATA_DIR / platform_id
+        profile_dir = browser_profiles_dir / platform_id
         profile_dir.mkdir(parents=True, exist_ok=True)
         await ctx.storage_state(path=str(profile_dir / "state.json"))
         logger.info("Saved browser state for %s", platform_id)

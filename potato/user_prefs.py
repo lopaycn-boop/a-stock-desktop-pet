@@ -19,7 +19,7 @@ from typing import Any
 
 logger = logging.getLogger("potato.user_prefs")
 
-DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+from potato.paths import DATA_DIR
 
 DEFAULT_PREFS = {
     "sectors": [],

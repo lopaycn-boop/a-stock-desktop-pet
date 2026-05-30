@@ -68,7 +68,7 @@ def _bootstrap_on_start() -> None:
     if os.getenv("POTATO_SEED_SECRETS_ON_START", "false").lower() in {"1", "true", "yes"}:
         try:
             from potato.bootstrap_config import load_bootstrap_settings
-            from potato.secrets import SecretStore, collect_secrets_from_env
+            from potato.secret_store import SecretStore, collect_secrets_from_env
 
             items = collect_secrets_from_env()
             # Never seed bootstrap keys from env into DB on start (bootstrap stays in process env).
@@ -112,7 +112,7 @@ def _ensure_bot_secrets() -> None:
             logger.info("POTATO_AUTO_SEED_BOTS upserted from env")
 
         try:
-            from potato.secrets import SecretStore
+            from potato.secret_store import SecretStore
             from potato.bootstrap_config import load_bootstrap_settings
 
             bootstrap = load_bootstrap_settings()
@@ -572,7 +572,7 @@ def notify_test(_: None = Depends(_verify_api_key)) -> dict[str, Any]:
 
 @app.post("/api/secrets/upsert")
 def secrets_upsert(body: SecretUpsertRequest, _: None = Depends(_verify_api_key)) -> dict[str, Any]:
-    from potato.secrets import SECRET_KEYS, load_db_secrets
+    from potato.secret_store import SECRET_KEYS, load_db_secrets
     from potato.notifications import upsert_bot_secret
 
     key = body.key.strip().upper()

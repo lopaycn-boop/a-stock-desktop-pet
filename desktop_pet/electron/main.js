@@ -226,11 +226,33 @@ function _spawnBackend() {
     }
   }
 
-  const env = { ...process.env };
+const env = { ...process.env };
   env.PORT = String(BACKEND_PORT);
+
+  const resRoot = process.resourcesPath || path.join(__dirname, '..');
+  const pthEntries = [
+    resRoot,
+    path.join(resRoot, 'potato'),
+    path.join(resRoot, 'backend'),
+  ];
+
+  const pthContent = pthEntries.join('\n');
+  const pthFile = path.join(resRoot, 'potato', '_desktop_pet_paths.pth');
+  try {
+    fs.writeFileSync(pthFile, pthContent, 'utf8');
+  } catch (e) {
+    console.error('[electron] Failed to write potato .pth:', e.message);
+  }
+
+  const siteDir = path.join(path.dirname(python), 'Lib', 'site-packages');
+  try { fs.mkdirSync(siteDir, { recursive: true }); } catch {}
+  try {
+    fs.writeFileSync(path.join(siteDir, 'desktop_pet_paths.pth'), pthContent, 'utf8');
+  } catch (e) {
+    console.error('[electron] Failed to write site-packages .pth:', e.message);
+  }
+
   env.PYTHONPATH = [
-    path.join(__dirname, '..', '..'),
-    path.join(process.resourcesPath || path.join(__dirname, '..'), 'potato'),
     path.join(__dirname, '..', 'backend'),
   ].join(path.delimiter) + (env.PYTHONPATH ? path.delimiter + env.PYTHONPATH : '');
 

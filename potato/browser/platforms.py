@@ -15,7 +15,7 @@ from typing import Any
 
 logger = logging.getLogger("potato.browser.platforms")
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+from potato.paths import DATA_DIR
 
 
 @dataclass

@@ -45,8 +45,8 @@ import qrcode
 from io import BytesIO
 
 logger = logging.getLogger("potato.billing")
+from potato.paths import DATA_DIR
 
-DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DB_PATH = DATA_DIR / "billing.db"
 
 PLATFORM_MARGIN_RATE = 1.0

@@ -21,11 +21,12 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from potato.paths import DATA_DIR
+
 logger = logging.getLogger("potato.pet.db")
 
 BACKEND_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BACKEND_DIR.parents[1]
-DATA_DIR = PROJECT_ROOT / "data"
 
 _db_instance = None
 

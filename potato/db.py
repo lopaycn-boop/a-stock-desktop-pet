@@ -12,6 +12,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 from potato.bootstrap_config import BootstrapSettings, load_bootstrap_settings
+from potato.paths import DATA_DIR
 
 logger = logging.getLogger("potato.db")
 
@@ -54,7 +55,7 @@ class Database:
             boot = load_bootstrap_settings()
             self._crdb_dsn = boot.crdb_dsn
         self._use_sqlite = not bool(self._crdb_dsn)
-        self._sqlite_path = Path(__file__).resolve().parents[1] / "data" / "potato.db"
+        self._sqlite_path = DATA_DIR / "potato.db"
 
     @property
     def backend(self) -> str:

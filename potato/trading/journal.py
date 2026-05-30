@@ -26,8 +26,9 @@ from potato.trading.analyzer import fetch_realtime_quote
 
 logger = logging.getLogger("potato.trading.journal")
 
+from potato.paths import DATA_DIR
+
 BJT = timezone(timedelta(hours=8))
-DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 JOURNAL_DIR = DATA_DIR / "journal"
 
 

@@ -9,7 +9,7 @@ import yaml
 from dotenv import load_dotenv
 
 from potato.bootstrap_config import build_crdb_dsn, load_bootstrap_settings
-from potato.secrets import load_db_secrets, resolve_secret
+from potato.secret_store import load_db_secrets, resolve_secret
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")

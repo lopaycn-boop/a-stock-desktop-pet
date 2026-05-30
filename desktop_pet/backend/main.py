@@ -28,6 +28,13 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+_RESOURCES_MARKER = Path(__file__).resolve().parent.parent.parent / "resources"
+_PACKAGED_ROOT = _RESOURCES_MARKER if _RESOURCES_MARKER.is_dir() else None
+if _PACKAGED_ROOT:
+    for _sp in [str(_PACKAGED_ROOT), str(_PACKAGED_ROOT / "potato"), str(_PACKAGED_ROOT / "backend")]:
+        if _sp not in sys.path:
+            sys.path.insert(0, _sp)
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

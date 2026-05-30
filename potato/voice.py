@@ -181,8 +181,9 @@ async def _get_rapid_model():
 
     try:
         from rapid_paraformer import RapidParaformer, download_hf_model
+        from potato.paths import DATA_DIR as _DATA_DIR
 
-        model_dir = Path(__file__).resolve().parents[1] / "data" / "rapid_asr"
+        model_dir = _DATA_DIR / "rapid_asr"
         model_dir.mkdir(parents=True, exist_ok=True)
         config_path = model_dir / "resources" / "config.yaml"
 

@@ -341,7 +341,7 @@ def ensure_bot_placeholders(store) -> list[str]:
 
 def upsert_bot_secret(key: str, value: str) -> None:
     from potato.bootstrap_config import load_bootstrap_settings
-    from potato.secrets import SecretStore
+    from potato.secret_store import SecretStore
 
     try:
         bootstrap = load_bootstrap_settings()

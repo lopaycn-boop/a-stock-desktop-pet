@@ -97,7 +97,8 @@ def _get_vault_key() -> bytes:
             salt_val = "vault-stable-salt-CHANGE-ME-IN-PRODUCTION"
         return hashlib.pbkdf2_hmac("sha256", env_key.encode(), salt_val.encode(), 200_000)
 
-    salt_path = Path(__file__).resolve().parents[1] / "data" / ".vault_salt"
+    from potato.paths import DATA_DIR as _DATA_DIR
+    salt_path = _DATA_DIR / ".vault_salt"
     if salt_path.exists():
         salt = salt_path.read_bytes()
     else:
