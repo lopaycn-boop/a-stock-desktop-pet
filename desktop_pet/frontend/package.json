@@ -35,22 +35,35 @@
       {
         "from": "../backend",
         "to": "backend",
-        "filter": ["**/*", "!__pycache__", "!*.pyc"]
+        "filter": [
+          "**/*",
+          "!__pycache__",
+          "!*.pyc"
+        ]
       },
       {
         "from": "../../potato",
         "to": "potato",
-        "filter": ["**/*", "!__pycache__", "!*.pyc", "!*.db"]
+        "filter": [
+          "**/*",
+          "!__pycache__",
+          "!*.pyc",
+          "!*.db"
+        ]
       },
       {
         "from": "../../config",
         "to": "config",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "../../schema",
         "to": "schema",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "../../.env.example",
@@ -59,12 +72,24 @@
       {
         "from": "python",
         "to": "python",
-        "filter": ["**/*", "!__pycache__", "!*.pyc", "!*.db", "!*.dist-info", "!*.egg-info"]
+        "filter": [
+          "**/*",
+          "!__pycache__",
+          "!*.pyc",
+          "!*.db",
+          "!*.dist-info",
+          "!*.egg-info"
+        ]
       },
       {
         "from": "../../data",
         "to": "data",
-        "filter": ["*.json", "*.db", "*.sql", "!*.pyc"]
+        "filter": [
+          "*.json",
+          "*.db",
+          "*.sql",
+          "!*.pyc"
+        ]
       },
       {
         "from": "../backend/requirements.txt",
@@ -75,7 +100,9 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "public/icon.ico"
@@ -109,6 +136,7 @@
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.16",
     "globals": "^15.14.0",
+    "javascript-obfuscator": "^5.4.3",
     "vite": "^6.0.5"
   }
 }
