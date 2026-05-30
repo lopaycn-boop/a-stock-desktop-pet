@@ -2,6 +2,19 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.0.2] - 2025-05-30
+
+### Bug Fixes
+- **Critical**: Add missing `import uvicorn` in `__main__` block — backend failed to start after port fallback edit
+- **Critical**: `BACKEND_PORT` changed from `const` to `let` — alternate port assignment was silently ignored
+- **High**: Fix frontend WS race condition — port was injected after page load, causing connection to wrong port
+- Frontend `backendPort` is now React state with `backend-port-ready` event listener for dynamic reconnection
+
+### Features
+- **Auto port fallback**: Backend automatically finds available port (8000–8009) if preferred port is occupied
+- **Dynamic port detection**: Electron scans 8000–8009 for backend after spawn, injects port into frontend via CustomEvent
+- Frontend WS auto-reconnects when Electron announces new backend port
+
 ## [1.0.1] - 2025-05-30
 
 ### Security Fixes
