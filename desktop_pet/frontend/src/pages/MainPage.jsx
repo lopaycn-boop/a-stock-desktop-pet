@@ -22,7 +22,10 @@ import { renderMessageContent } from '../hooks/useMessageRenderer.jsx';
 import { getSavedModelId, saveModelId } from '../components/Live2D/modelRegistry';
 import ErrorBoundary from '../components/ErrorBoundary';
 import SplashScreen from '../components/SplashScreen';
+import ToastContainer, { showToast } from '../components/ToastContainer';
+import QuickReplyChips from '../components/QuickReplyChips';
 import useI18n from '../hooks/useI18n';
+import useTheme from '../hooks/useTheme';
 
 function formatTs(ts) {
   if (!ts) return '';
@@ -143,6 +146,7 @@ const QUICK_ACTIONS = [
 export default function MainPage() {
   const { messages, setMessages, clearMessages } = usePersistentMessages();
   const { t, lang, switchLang, isZh } = useI18n();
+  const { theme, effectiveTheme, cycleTheme } = useTheme();
   const [neuroState, setNeuroState] = useState("idle");
   const [inputText, setInputText] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
@@ -222,6 +226,7 @@ export default function MainPage() {
         break;
       case 'vault_stored':
         setMessages(prev => [...prev, { type: 'system', content: `✅ ${payload.key} 已保存` }]);
+        showToast(`${payload.key} 已保存`, 'success');
         sendPacket({ type: 'vault_status', payload: {} });
         break;
       case 'vault_deleted':
@@ -865,12 +870,14 @@ case 'billing_renewal_payment': {
     if (connected) {
       if (prevConnectedRef.current === false) {
         setMessages(prev => [...prev, { type: 'system', content: '✅ 连接已恢复' }]);
+        showToast('连接已恢复', 'success');
       }
       sendPacket({ type: 'vault_status', payload: {} });
       fetch(`http://${window.location.hostname}:${backendPort}/health`).then(r => r.json()).then(setSystemStatus).catch(() => {});
     } else {
       if (prevConnectedRef.current === true) {
         setMessages(prev => [...prev, { type: 'system', content: '⚠️ 与服务器断开连接，正在重连...' }]);
+        showToast('连接断开', 'warning');
       }
     }
     prevConnectedRef.current = connected;
@@ -1162,6 +1169,7 @@ case 'billing_renewal_payment': {
       fallbackTitle={t('error_boundary.title')}
       fallbackMessage={t('error_boundary.message')}
     >
+    <ToastContainer />
     <div className="app">
       {/* 桌宠：全屏 */}
       <div className="pet-layer">
@@ -1217,6 +1225,7 @@ case 'billing_renewal_payment': {
           <button className="close-btn" onClick={() => setChatOpen(false)}>✕</button>
             <button onClick={clearMessages} title="清空聊天记录" style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>🗑️</button>
             <button onClick={() => switchLang(isZh ? 'en' : 'zh')} title={isZh ? 'Switch to English' : '切换到中文'} style={{ background: 'none', border: 'none', color: isZh ? '#69f0ae' : '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>🌐</button>
+            <button onClick={cycleTheme} title={theme === 'dark' ? '切换浅色' : theme === 'light' ? '跟随系统' : '切换深色'} style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>{effectiveTheme === 'dark' ? '🌙' : '☀️'}</button>
         </div>
 
         <div className="chat-quick">
@@ -1224,6 +1233,11 @@ case 'billing_renewal_payment': {
             <button key={a.label} onClick={() => handleQuickAction(a)}>{a.label}</button>
           ))}
         </div>
+
+        <QuickReplyChips
+          onSend={(msg) => { sendPacket({ type: 'text_input', payload: { text: msg } }); setChatOpen(true); }}
+          lastMessageType={messages.length > 0 ? messages[messages.length - 1].type : 'system'}
+        />
 
         <div className="chat-msgs" ref={chatMessagesRef} onScroll={handleChatScroll}>
           {!connected && (

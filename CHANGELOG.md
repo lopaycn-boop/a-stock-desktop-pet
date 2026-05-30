@@ -2,6 +2,19 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.10.0] - 2025-05-30
+
+### New Features
+- **Theme Switcher**: 🌙/☀️ toggle cycles dark→light→auto, CSS custom properties power instant switch
+- **Toast Notifications**: Non-blocking toasts (✅❌⚠️ℹ️📊) for key events — key saved, connection status, etc.
+- **Quick Reply Chips**: Contextual suggested replies below quick actions (行情/分析/操作/复盘 categories)
+- **54 total features registered**
+
+### UX
+- Theme persisted in localStorage `potato_theme`, auto follows system preference
+- Toast auto-dismisses after 3s, click to dismiss early
+- Quick reply chips adapt to last message type (trade→操作+复盘, system→行情)
+
 ## [1.9.0] - 2025-05-30
 
 ### New Features
