@@ -27,12 +27,19 @@ desktop_pet/frontend/resources/python/
 !.env.example
 *.pem
 .vault_salt
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
 
 # === Database ===
 *.db
 *.sqlite
 *.sqlite3
 data/
+potato.db
+wallet.db
 
 # === User data (PII risk) ===
 memory_db/
@@ -52,10 +59,20 @@ desktop.ini
 
 # === Build artifacts ===
 release/
+dist_obfuscated/
 *.exe
 *.dmg
 *.AppImage
 *.snap
+*.nupkg
 
 # === Logs ===
 *.log
+
+# === Source protection ===
+# Compiled Python bytecode (production releases ship .pyc only)
+*.pyc
+!__pycache__/.gitkeep
+
+# === Browser profiles (contains login sessions) ===
+browser_profiles/

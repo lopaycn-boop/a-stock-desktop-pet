@@ -263,7 +263,7 @@ def test_sanitize_reply_masks_secrets():
     from main import _sanitize_reply
 
     assert "***" in _sanitize_reply("my key is sk-abc12345def67890xyz012abc345def678"), "sk-key not masked"
-    assert "***" in _sanitize_reply("wallet TLyD5v9eTDp3mMzpYT3kprF6WdsUc3W99d"), "wallet not masked"
+    assert "***" in _sanitize_reply("wallet TNaKz5d2eR9u8W9oM3bXqY7kP4fGh6iJkLm"), "wallet not masked"
     assert "***" in _sanitize_reply("password=supersecret123"), "password not masked"
     assert "***" in _sanitize_reply("from potato.billing import BillingManager"), "import not masked"
     assert "***" in _sanitize_reply("sqlite database at data/billing.db"), "db path not masked"

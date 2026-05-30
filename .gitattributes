@@ -1,5 +1,31 @@
-.env filter=gitcrypt diff=gitcrypt
-.env.* filter=gitcrypt diff=gitcrypt
-*.pem filter=gitcrypt diff=gitcrypt
-*.key filter=gitcrypt diff=gitcrypt
-*.crt filter=gitcrypt diff=gitcrypt
+# Binary files — no text diffs
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+*.p12 binary
+*.pfx binary
+*.key binary
+*.pem binary
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.exe binary
+*.dmg binary
+*.AppImage binary
+*.snap binary
+*.nupkg binary
+
+# Compiled Python — treat as binary to prevent diffing decompiled output
+*.pyc binary
+
+# Frontend built assets — treat as binary for clean diffs
+desktop_pet/frontend/dist/** binary
+
+# Vault and secrets — never diff
+.vault_salt binary
