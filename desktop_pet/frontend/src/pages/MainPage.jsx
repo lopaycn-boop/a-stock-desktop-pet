@@ -159,6 +159,8 @@ export default function MainPage() {
   const [alwaysOnTop, setAlwaysOnTop] = useState(true);
   const [systemStatus, setSystemStatus] = useState(null);
   const messagesEndRef = useRef(null);
+  const chatMessagesRef = useRef(null);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
   const live2dRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
@@ -914,6 +916,18 @@ case 'billing_renewal_payment': {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, actionSteps]);
 
+  const handleChatScroll = useCallback(() => {
+    const el = chatMessagesRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowScrollBottom(distFromBottom > 80);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setShowScrollBottom(false);
+  }, []);
+
   // ── 麦克风录音 ──
   const startRecording = useCallback(async () => {
     if (recording || neuroState === 'thinking') return;
@@ -1183,7 +1197,7 @@ case 'billing_renewal_payment': {
           ))}
         </div>
 
-        <div className="chat-msgs">
+        <div className="chat-msgs" ref={chatMessagesRef} onScroll={handleChatScroll}>
           {!connected && (
             <div style={{ position: 'sticky', top: 0, zIndex: 10, background: 'rgba(255,82,82,0.15)', borderBottom: '1px solid rgba(255,82,82,0.3)', color: '#ff8a80', textAlign: 'center', fontSize: 12, padding: '6px', backdropFilter: 'blur(8px)' }}>
               ⚠️ 连接断开，正在重连...
@@ -1262,15 +1276,31 @@ case 'billing_renewal_payment': {
             );
           })}
           <div ref={messagesEndRef} />
+          {showScrollBottom && (
+            <button onClick={scrollToBottom} style={{
+              position: 'sticky', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+              background: 'rgba(105,240,174,0.2)', border: '1px solid rgba(105,240,174,0.4)',
+              borderRadius: 20, padding: '4px 14px', color: '#69f0ae', fontSize: 12,
+              cursor: 'pointer', backdropFilter: 'blur(8px)', zIndex: 5,
+            }}>↓ 新消息</button>
+          )}
         </div>
 
         <div className="chat-input-row">
-          <input
+          <textarea
             value={inputText}
             onChange={e => setInputText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-            placeholder={recording ? '🎤 录音中...' : '输入消息或粘贴密钥...'}
+            placeholder={recording ? '🎤 录音中...' : '输入消息或粘贴密钥...\nShift+Enter换行'}
             disabled={neuroState === "thinking"}
+            rows={1}
+            style={{
+              flex: 1, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 12, padding: '8px 12px', color: '#ddd', fontSize: 13,
+              resize: 'none', outline: 'none', minHeight: 36, maxHeight: 120, lineHeight: 1.4,
+              fontFamily: 'inherit', scrollbarWidth: 'thin',
+            }}
+            onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'; }}
           />
           <button className="send-btn" onClick={handleSend} disabled={!inputText.trim()} title="发送">&#10148;</button>
         </div>

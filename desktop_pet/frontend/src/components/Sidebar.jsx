@@ -13,6 +13,9 @@ const Sidebar = ({ isOpen, onClose, messages, sendPacket }) => {
   const [tab, setTab] = useState('chat');
   const [pasteValue, setPasteValue] = useState('');
   const [pasteMsg, setPasteMsg] = useState(null);
+  const [memoryQuery, setMemoryQuery] = useState('');
+  const [memoryResults, setMemoryResults] = useState([]);
+  const [memoryLoading, setMemoryLoading] = useState(false);
 
   const handlePasteStore = () => {
     const val = pasteValue.trim();
@@ -51,6 +54,7 @@ const Sidebar = ({ isOpen, onClose, messages, sendPacket }) => {
           <div style={{ display: 'flex', gap: 4 }}>
             <button onClick={() => setTab('chat')} style={{ background: tab === 'chat' ? 'rgba(100,108,255,0.3)' : 'transparent', border: 'none', color: 'white', padding: '4px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>💬</button>
             <button onClick={() => setTab('vault')} style={{ background: tab === 'vault' ? 'rgba(100,108,255,0.3)' : 'transparent', border: 'none', color: 'white', padding: '4px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>🔐</button>
+            <button onClick={() => setTab('memory')} style={{ background: tab === 'memory' ? 'rgba(100,108,255,0.3)' : 'transparent', border: 'none', color: 'white', padding: '4px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>🧠</button>
           </div>
           <button className="sidebar-close-btn" onClick={onClose}>&#215;</button>
         </div>
@@ -130,6 +134,54 @@ const Sidebar = ({ isOpen, onClose, messages, sendPacket }) => {
                 color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: 12,
               }}
             >📋 查看保险箱状态</button>
+          </div>
+        )}
+
+        {tab === 'memory' && (
+          <div className="sidebar-content">
+            <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, marginBottom: 12, lineHeight: 1.6 }}>
+              🧠 搜索小土豆的对话记忆<br />输入关键词回顾历史对话
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+              <input
+                placeholder="搜索记忆..."
+                value={memoryQuery}
+                onChange={e => setMemoryQuery(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && memoryQuery.trim()) {
+                    setMemoryLoading(true);
+                    sendPacket({ type: 'memory_search', payload: { query: memoryQuery.trim() } });
+                  }
+                }}
+                style={{
+                  flex: 1, padding: '8px 12px', borderRadius: 8, fontSize: 13,
+                  border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.05)',
+                  color: 'white', outline: 'none',
+                }}
+              />
+              <button
+                onClick={() => {
+                  if (!memoryQuery.trim()) return;
+                  setMemoryLoading(true);
+                  sendPacket({ type: 'memory_search', payload: { query: memoryQuery.trim() } });
+                }}
+                disabled={!memoryQuery.trim()}
+                style={{
+                  padding: '8px 14px', borderRadius: 8, border: 'none',
+                  background: memoryQuery.trim() ? '#646cff' : 'rgba(255,255,255,0.1)',
+                  color: memoryQuery.trim() ? 'white' : 'rgba(255,255,255,0.3)',
+                  cursor: memoryQuery.trim() ? 'pointer' : 'not-allowed', fontSize: 13,
+                }}
+              >🔍</button>
+            </div>
+            <button
+              onClick={() => sendPacket({ type: 'get_memory', payload: {} })}
+              style={{
+                width: '100%', padding: '8px', borderRadius: 10,
+                border: '1px solid rgba(255,255,255,0.15)', background: 'transparent',
+                color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: 12,
+              }}
+            >📋 查看所有记忆</button>
           </div>
         )}
       </div>

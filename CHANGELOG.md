@@ -2,6 +2,19 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.7.0] - 2025-05-30
+
+### UX Improvements
+- **Multiline Chat Input**: Textarea replaces input — Shift+Enter for newlines, Enter to send, auto-grows up to 5 lines
+- **Scroll-to-Bottom Button**: When scrolled up, a "↓ 新消息" sticky button appears to jump back down
+- **Memory Search in Sidebar**: New 🧠 tab for searching conversation memory and viewing all memories
+
+### Technical
+- Textarea with `onInput` auto-resize (max 120px height)
+- `showScrollBottom` state with `handleChatScroll` detection
+- Sidebar gets 3rd tab (🧠 Memory) with search input and "view all" button
+- 204 tests passing, 45 features
+
 ## [1.6.0] - 2025-05-30
 
 ### New Features
