@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from pathlib import Path
 
 logger = logging.getLogger("potato.paths")
@@ -16,8 +17,13 @@ def _resolve_data_dir() -> Path:
         test_file.unlink()
         return _DEFAULT_DATA_DIR
     except (PermissionError, OSError):
-        app_data = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-        fallback = app_data / "potato-desktop-pet" / "data"
+        if sys.platform == "darwin":
+            fallback = Path.home() / "Library" / "Application Support" / "potato-desktop-pet" / "data"
+        elif sys.platform == "linux":
+            xdg = os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
+            fallback = Path(xdg) / "potato-desktop-pet" / "data"
+        else:
+            fallback = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "potato-desktop-pet" / "data"
         fallback.mkdir(parents=True, exist_ok=True)
         logger.info("Data dir fallback: %s (original %s not writable)", fallback, _DEFAULT_DATA_DIR)
         return fallback

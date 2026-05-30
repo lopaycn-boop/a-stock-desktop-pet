@@ -112,18 +112,43 @@ function findBackendPort(startPort = 8000, maxTries = 10) {
 // ── Find Python ──
 function findPython() {
   const { execSync } = require('child_process');
-  const candidates = [
-    process.env.PYTHON_PATH,
-    path.join(process.resourcesPath || '', 'python', 'python.exe'),
-    'python',
-    'python3',
-    'C:\\Python312\\python.exe',
-    'C:\\Python311\\python.exe',
-    'C:\\Python310\\python.exe',
-    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe'),
-    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'python.exe'),
-    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python310', 'python.exe'),
-  ].filter(Boolean);
+  const platform = process.platform;
+  let candidates = [process.env.PYTHON_PATH, 'python3', 'python'].filter(Boolean);
+
+  if (platform === 'win32') {
+    candidates = [
+      process.env.PYTHON_PATH,
+      path.join(process.resourcesPath || '', 'python', 'python.exe'),
+      'python',
+      'python3',
+      'C:\\Python312\\python.exe',
+      'C:\\Python311\\python.exe',
+      'C:\\Python310\\python.exe',
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'python.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python310', 'python.exe'),
+    ].filter(Boolean);
+  } else if (platform === 'darwin') {
+    candidates = [
+      process.env.PYTHON_PATH,
+      '/opt/homebrew/bin/python3',
+      '/usr/local/bin/python3',
+      '/usr/bin/python3',
+      path.join(process.env.HOME || '', '.local', 'bin', 'python3'),
+      'python3',
+      'python',
+    ].filter(Boolean);
+  } else {
+    candidates = [
+      process.env.PYTHON_PATH,
+      '/usr/bin/python3',
+      '/usr/local/bin/python3',
+      path.join(process.env.HOME || '', '.local', 'bin', 'python3'),
+      path.join(process.env.HOME || '', '.pyenv', 'shims', 'python3'),
+      'python3',
+      'python',
+    ].filter(Boolean);
+  }
 
   for (const p of candidates) {
     try {
@@ -133,7 +158,7 @@ function findPython() {
     } catch(e) {}
   }
   console.error('[electron] Python not found, backend will not start');
-  return 'python';
+  return platform === 'win32' ? 'python' : 'python3';
 }
 
 // ── Start backend ──
@@ -244,7 +269,10 @@ const env = { ...process.env };
     console.error('[electron] Failed to write potato .pth:', e.message);
   }
 
-  const siteDir = path.join(path.dirname(python), 'Lib', 'site-packages');
+  const isWin = process.platform === 'win32';
+  const siteDir = isWin
+    ? path.join(path.dirname(python), 'Lib', 'site-packages')
+    : path.join(path.dirname(python), '..', 'lib', `python3.${process.arch === 'arm64' ? '12' : '12'}`, 'site-packages');
   try { fs.mkdirSync(siteDir, { recursive: true }); } catch {}
   try {
     fs.writeFileSync(path.join(siteDir, 'desktop_pet_paths.pth'), pthContent, 'utf8');
@@ -261,12 +289,11 @@ const env = { ...process.env };
     : mainPy;
   const cwd = path.dirname(mainPyPath);
 
-  backendProc = spawn(python, [`"${mainPyPath}"`], {
-    cwd,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: true,
-  });
+  const spawnArgs = isWin ? [`"${mainPyPath}"`] : [mainPyPath];
+  const spawnOpts = { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] };
+  if (isWin) spawnOpts.shell = true;
+
+  backendProc = spawn(python, spawnArgs, spawnOpts);
 
   backendProc.stdout.on('data', (data) => {
     console.log(`[backend] ${data.toString().trim()}`);
