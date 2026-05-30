@@ -2,6 +2,28 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.2.0] - 2025-05-30
+
+### New Features
+- **Desktop Notifications**: Trade signals, risk alerts, circuit breakers, quota exhaustion, backend/agent crashes now trigger native OS notifications via Browser Notification API
+- **Wake Word Activation**: Voice wake word ("小土豆" / "土豆") opens chat automatically — toggle button in chat header
+- **Auto-Update**: `electron-updater` integration with GitHub Releases — checks for updates on startup, prompts download, one-click restart
+- **Check Updates Button**: "🆙 更新" quick action button in chat toolbar
+- **System Event Notifications**: Backend crash, agent crash, suspend/resume, and update progress events show in chat
+
+### Cleanup
+- Removed unused `MessageList.jsx`, `InputArea.jsx`, `VoiceInput.jsx` components (MainPage inlines all functionality)
+- Removed empty `components/Chat/` directory
+
+### Technical
+- `useDesktopNotification` hook: Browser Notification with click-to-focus, 8s auto-dismiss, auto-permission request
+- `useWakeWord` hook now integrated into MainPage (previously orphaned)
+- Electron `main.js`: `setupAutoUpdater()` with GitHub provider, download progress, quit-and-install
+- `preload.js`: Added `checkForUpdates` IPC bridge
+- Electron `package.json`: Added `publish` config for GitHub releases, version bumped to 1.2.0
+- `version.py`: Bumped to 1.2.0, added 3 new features (desktop_notifications, wake_word, auto_update)
+- 204 tests passing
+
 ## [1.1.0] - 2025-05-30
 
 ### New Feature: TrendRadar 舆情热点插件

@@ -1,6 +1,6 @@
 {
   "name": "potato-desktop-pet",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "小土豆 AI操盘桌宠 — 自主交易+全电脑操控+Live2D",
   "author": "自由的风",
   "main": "main.js",
@@ -32,29 +32,44 @@
       {
         "from": "../backend",
         "to": "backend",
-        "filter": ["**/*", "!__pycache__/**"]
+        "filter": [
+          "**/*",
+          "!__pycache__/**"
+        ]
       },
       {
         "from": "../../potato",
         "to": "potato",
-        "filter": ["**/*", "!__pycache__/**"]
+        "filter": [
+          "**/*",
+          "!__pycache__/**"
+        ]
       },
       {
         "from": "../../data",
         "to": "data",
-        "filter": ["**/*", "!*.db", "!*.sqlite", "!*.sqlite3", "!*.vault_salt", "!user_prefs.json"]
+        "filter": [
+          "**/*",
+          "!*.db",
+          "!*.sqlite",
+          "!*.sqlite3",
+          "!*.vault_salt",
+          "!user_prefs.json"
+        ]
       }
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/icon.ico"
     },
-    "nsis": {
+"nsis": {
       "oneClick": true,
       "perMachine": true,
       "allowElevation": true,
@@ -64,10 +79,18 @@
       "language": 2052,
       "installerIcon": "assets/icon.ico",
       "unicode": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "lopaycn-boop",
+      "repo": "a-stock-desktop-pet"
     }
   },
   "devDependencies": {
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   }
 }

@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('potatoAPI', {
   setOpacity: (opacity) => ipcRenderer.invoke('set-opacity', opacity),
   powerStatus: () => ipcRenderer.invoke('power-status'),
   screenSources: () => ipcRenderer.invoke('screen-sources'),
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
 
   // Event listeners from main process
   onTrayAction: (callback) => {

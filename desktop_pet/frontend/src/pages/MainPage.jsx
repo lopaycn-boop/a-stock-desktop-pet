@@ -10,6 +10,8 @@ import '../App.css';
 import { useAudioQueue } from '../hooks/useAudioQueue';
 import { useNeuroSocket } from '../hooks/useNeuroSocket';
 import { useClickThrough } from '../hooks/useClickThrough';
+import { useDesktopNotification } from '../hooks/useDesktopNotification';
+import { useWakeWord } from '../hooks/useWakeWord';
 import { getSavedModelId, saveModelId } from '../components/Live2D/modelRegistry';
 
 const SECRET_PATTERNS = [
@@ -87,6 +89,7 @@ const QUICK_ACTIONS = [
   { label: '🧠 记忆', msg: '__memory__' },
   { label: '🔑 密钥', msg: '__vault__' },
   { label: '📡 数据', msg: '__data_panel__' },
+  { label: '🆙 更新', msg: '__check_updates__' },
 ];
 
 export default function MainPage() {
@@ -114,11 +117,16 @@ export default function MainPage() {
   const micTimerRef = useRef(null);
 
   useClickThrough();
+  const { notify } = useDesktopNotification();
+  const { listening: wakeListening, startWakeListener, stopWakeListener } = useWakeWord({
+    onWake: useCallback(() => { setChatOpen(true); }, []),
+  });
 
   const { subtitle, isPlaying, queueAudioChunk, stopAudio } = useAudioQueue(live2dRef);
 
   const handleServerPacket = useCallback((packet) => {
     const { type, payload } = packet;
+    notify(packet);
     switch (type) {
       case 'state_update':
         setNeuroState(payload.state);
@@ -819,6 +827,27 @@ case 'billing_renewal_payment': {
   }, [sendPacket]);
 
   useEffect(() => {
+    if (!window.potatoAPI || !window.potatoAPI.onSystemEvent) return;
+    const handler = (data) => {
+      if (data.type === 'backend_crash') {
+        setMessages(prev => [...prev, { type: 'system', content: '⚠️ 后端进程异常退出，正在自动重启...' }]);
+        notify({ type: 'backend_crash', payload: data });
+      } else if (data.type === 'agent_crash') {
+        setMessages(prev => [...prev, { type: 'system', content: '⚠️ Bytebot Agent异常退出，正在自动重启...' }]);
+        notify({ type: 'agent_crash', payload: data });
+      } else if (data.type === 'backend_timeout') {
+        setMessages(prev => [...prev, { type: 'system', content: '❌ 后端启动超时，请检查Python环境' }]);
+      } else if (data.type === 'suspend') {
+        setMessages(prev => [...prev, { type: 'system', content: '💻 系统即将休眠' }]);
+      } else if (data.type === 'resume') {
+        setMessages(prev => [...prev, { type: 'system', content: '💻 系统已恢复运行' }]);
+      }
+    };
+    window.potatoAPI.onSystemEvent(handler);
+    return () => {};
+  }, [notify]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, actionSteps]);
 
@@ -975,6 +1004,21 @@ case 'billing_renewal_payment': {
       }, 500);
       return;
     }
+    if (action.msg === '__check_updates__') {
+      if (window.potatoAPI && window.potatoAPI.checkForUpdates) {
+        setMessages(prev => [...prev, { type: 'system', content: '🔍 正在检查更新...' }]);
+        window.potatoAPI.checkForUpdates().then(result => {
+          if (result.ok) {
+            setMessages(prev => [...prev, { type: 'system', content: `ℹ️ 当前已是最新版本 (v${result.version})` }]);
+          } else {
+            setMessages(prev => [...prev, { type: 'system', content: `⚠️ 检查更新失败: ${result.error}` }]);
+          }
+        });
+      } else {
+        setMessages(prev => [...prev, { type: 'system', content: 'ℹ️ 更新检查仅在桌面端可用' }]);
+      }
+      return;
+    }
     setChatOpen(true);
     setMessages(prev => [...prev, { type: 'user', content: action.msg }]);
     sendPacket({ type: "text_input", payload: { text: action.msg } });
@@ -1036,6 +1080,17 @@ case 'billing_renewal_payment': {
                  `🟢${systemStatus.data_sources.active_providers}key` : '🔴0key'}
               </span>
             )}
+            <button
+              onClick={() => wakeListening ? stopWakeListener() : startWakeListener()}
+              style={{
+                marginLeft: 6, fontSize: 11, border: 'none', cursor: 'pointer',
+                background: wakeListening ? 'rgba(0,200,120,0.3)' : 'rgba(255,255,255,0.08)',
+                borderRadius: 8, padding: '2px 6px', color: wakeListening ? '#4fc3f7' : '#888',
+              }}
+              title={wakeListening ? '语音唤醒已开启（喊"小土豆"即可对话）' : '点击开启语音唤醒'}
+            >
+              {wakeListening ? '🔊唤醒' : '🔇唤醒'}
+            </button>
           </div>
           <button className="close-btn" onClick={() => setChatOpen(false)}>✕</button>
         </div>

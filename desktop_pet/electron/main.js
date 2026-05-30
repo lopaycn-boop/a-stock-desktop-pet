@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const http = require('http');
 const fs = require('fs');
 const net = require('net');
+const autoUpdater = require('electron-updater').autoUpdater;
 
 let mainWindow = null;
 let tray = null;
@@ -335,6 +336,83 @@ function createTray() {
   });
 }
 
+// ── Auto-updater ──
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = false;
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'lopaycn-boop',
+    repo: 'a-stock-desktop-pet',
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system-event', {
+        type: 'update_available',
+        version: info.version,
+        releaseDate: info.releaseDate,
+      });
+      const choice = require('electron').dialog.showMessageBoxSync(mainWindow, {
+        type: 'info',
+        title: '发现新版本',
+        message: `新版本 v${info.version} 可用，是否立即下载？`,
+        buttons: ['下载更新', '稍后再说'],
+        defaultId: 0,
+        noLink: true,
+      });
+      if (choice === 0) {
+        autoUpdater.downloadUpdate();
+      }
+    }
+  });
+
+  autoUpdater.on('download-progress', (progressInfo) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system-event', {
+        type: 'update_progress',
+        percent: Math.round(progressInfo.percent),
+        speed: Math.round(progressInfo.bytesPerSecond / 1024),
+      });
+    }
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const choice = require('electron').dialog.showMessageBoxSync(mainWindow, {
+        type: 'info',
+        title: '更新已下载',
+        message: `v${info.version} 已下载完成，重启后生效。是否现在重启？`,
+        buttons: ['立即重启', '稍后重启'],
+        defaultId: 0,
+        noLink: true,
+      });
+      if (choice === 0) {
+        isQuitting = true;
+        autoUpdater.quitAndInstall();
+      }
+    }
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.log('[updater] Error:', err.message);
+  });
+
+  ipcMain.handle('check-for-updates', async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return { ok: true, version: result?.updateInfo?.version || 'unknown' };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  try {
+    autoUpdater.checkForUpdates();
+  } catch (e) {
+    console.log('[updater] check failed:', e.message);
+  }
+}
+
 // ── Auto-start on boot ──
 function setAutoStart(enable = true) {
   const appFolder = path.dirname(process.execPath);
@@ -543,6 +621,7 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
   setupIPC();
+  setupAutoUpdater();
 
   // Set auto-start
   setAutoStart(true);
