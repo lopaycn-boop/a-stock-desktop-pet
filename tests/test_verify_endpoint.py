@@ -9,7 +9,7 @@ def test_verify_module_import():
     assert __version__ == "1.20.2"
     assert __author__ == "自由的风"
     assert BUILD == "20250530"
-    assert len(FEATURES) == 90
+    assert len(FEATURES) == 93
 
 
 def test_verify_module_runs():

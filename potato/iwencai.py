@@ -229,10 +229,27 @@ class IwencaiClient:
 
 
 def _web_scrape_query(question: str, page: int = 1, limit: int = 10) -> dict[str, Any]:
-    """Fallback: free web scraping query (no API key needed, limited reliability)."""
+    """Fallback: free web scraping query (no API key needed, limited reliability).
+    Tries Iwencai first, then EastMoney datacenter as last resort.
+    """
+    result = _iwencai_web_query(question, page, limit)
+    if result.get("ok"):
+        return result
+    em_result = _em_datacenter_query(question, page, limit)
+    if em_result.get("ok"):
+        return em_result
+    if result.get("error") and "Timeout" in result.get("error", ""):
+        return {"ok": False, "error": "问财网络不可达，请配置IWENCAI_API_KEY或检查网络", "question": question}
+    return result
+
+
+def _iwencai_web_query(question: str, page: int, limit: int) -> dict[str, Any]:
+    """Iwencai web scraping query."""
     headers = {
         "Content-Type": "application/json;charset=UTF-8",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Referer": "https://www.iwencai.com/",
+        "Origin": "https://www.iwencai.com",
     }
     payload = {
         "source": "Ths_iwencai_Xuangu",
@@ -284,11 +301,67 @@ def _web_scrape_query(question: str, page: int = 1, limit: int = 10) -> dict[str
             "source": "iwencai_web",
         }
 
-    except httpx.TimeoutException:
-        return {"ok": False, "error": "网页查询超时", "question": question}
+    except (httpx.TimeoutException, httpx.ConnectTimeout):
+        return {"ok": False, "error": "问财查询超时", "question": question}
     except Exception as e:
         logger.warning("Iwencai web scrape error: %s", e)
         return {"ok": False, "error": str(e)[:200], "question": question}
+
+
+def _em_datacenter_query(question: str, page: int, limit: int) -> dict[str, Any]:
+    """EastMoney datacenter as last resort for stock queries."""
+    import re as _re
+    dc_url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    question_lower = question.lower()
+    report_map = {
+        "涨停": "RPTA_WEB_KZZ_LS",
+        "龙虎": "RPT_DAILYBOARD_DETAILS",
+        "大盘": "RPT_ECONOMY_MACRO",
+        "北向": "RPT_MUTUAL_FUND_NORTHBOUND",
+        "融资": "RPT_MARGIN_TRADEDetail",
+    }
+    report_name = "RPT_LICO_FN_CPD"
+    for keyword, rpt in report_map.items():
+        if keyword in question_lower:
+            report_name = rpt
+            break
+
+    try:
+        client = httpx.Client(timeout=_TIMEOUT, follow_redirects=True)
+        params = {
+            "reportName": report_name,
+            "columns": "ALL",
+            "pageNumber": str(page),
+            "pageSize": str(limit),
+            "sortColumns": "TRADE_DATE",
+            "sortTypes": "-1",
+            "source": "WEB",
+            "client": "WEB",
+        }
+        resp = client.get(dc_url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        result = data.get("result", {})
+        if not result or not result.get("data"):
+            return {"ok": False, "error": "数据中心无结果", "question": question}
+
+        rows = result["data"][:limit]
+        items = []
+        for row in rows:
+            items.append({
+                "code": row.get("SECURITY_CODE", ""),
+                "name": row.get("SECURITY_NAME_ABBR", row.get("SECURITY_NAME", "")),
+                "raw": row,
+            })
+        return {
+            "ok": True,
+            "data": items,
+            "total": result.get("count", len(items)),
+            "question": question,
+            "source": "em_datacenter",
+        }
+    except Exception:
+        return {"ok": False, "error": "数据中心不可用", "question": question}
 
 
 def format_iwencai_to_text(result: dict[str, Any]) -> str:

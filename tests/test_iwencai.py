@@ -2,7 +2,7 @@
 import sys
 sys.path.insert(0, ".")
 
-from potato.iwencai import IwencaiClient, format_iwencai_to_text
+from potato.iwencai import IwencaiClient, format_iwencai_to_text, _web_scrape_query
 
 
 class TestIwencaiClient:
@@ -98,3 +98,14 @@ class TestIwencaiClient:
         result = {"ok": True, "data": [], "total": 0, "question": "test", "source": "iwencai_web"}
         text = format_iwencai_to_text(result)
         assert "未查到数据" in text
+
+    def test_web_scrape_query_returns_dict(self):
+        result = _web_scrape_query("涨停", page=1, limit=3)
+        assert isinstance(result, dict)
+        assert "ok" in result
+        assert "question" in result
+
+    def test_web_scrape_query_has_source(self):
+        result = _web_scrape_query("连涨3天", page=1, limit=3)
+        if result.get("ok"):
+            assert result.get("source") in ("iwencai_web", "em_datacenter")

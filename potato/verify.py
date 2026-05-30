@@ -29,11 +29,12 @@ def verify():
         ("potato.trading.broker", "券商适配(dry_run/live)"),
         ("potato.trading.journal", "专业复盘系统"),
         ("potato.trading.plan_execute", "PlanExecute多步分析"),
-        ("potato.eastmoney", "东方财富AI SaaS(8API+情感+异动)"),
-        ("potato.iwencai", "问财智能选股(2API+网页回退)"),
+        ("potato.eastmoney", "东方财富AI SaaS(8API+情感+异动+K线+多源回退)"),
+        ("potato.iwencai", "问财智能选股(2API+网页回退+数据中心回退)"),
         ("potato.config", "配置管理"),
         ("potato.memory", "30天记忆系统"),
         ("potato.security", "安全模块(密钥保护+源码保护)"),
+        ("potato.plugins", "插件系统(AIS+DeepAudit)"),
     ]
 
     for mod_name, desc in modules:
@@ -48,6 +49,7 @@ def verify():
     optional = [
         ("potato.voice", "TTS/STT语音"),
         ("potato.intel", "资讯抓取(RSS)"),
+        ("potato.plugins", "插件系统(AIS+DeepAudit)"),
     ]
     for mod_name, desc in optional:
         try:

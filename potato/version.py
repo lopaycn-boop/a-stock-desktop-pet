@@ -9,7 +9,8 @@ FEATURES = [
     "risk_control", "professional_review", "bytebot_agent",
     "eastmoney_ai", "iwencai", "plan_execute", "6agent_analysis",
     "sentiment_analysis", "stock_changes", "hot_tables", "chip_distribution",
-    "realtime_quotes", "billing", "vault_encryption", "demo_mode",
+    "kline_data", "realtime_quotes", "multi_source_fallback",
+    "billing", "vault_encryption", "demo_mode",
     "ws_realtime", "tts_stt", "memory_30d", "trendradar",
     "desktop_notifications", "wake_word", "auto_update",
     "sound_effects", "keyboard_shortcuts", "timestamps", "copy_message",
@@ -30,4 +31,5 @@ FEATURES = [
     "emoji_picker", "notif_filter", "smart_reconnect", "markdown_export",
     "trade_confirm_dialog", "http_rate_limit", "ws_message_size_limit", "input_length_limit",
     "vault_exists_check", "enhanced_secret_masking", "safe_error_fallback",
+    "plugin_system",
 ]

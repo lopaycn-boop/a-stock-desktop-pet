@@ -10,6 +10,11 @@ from potato.eastmoney import (
     NEGATION_WORDS,
     DEGREE_WORDS,
     TRANSITION_WORDS,
+    get_realtime_quote,
+    get_stock_changes,
+    get_hot_tables,
+    get_kline_data,
+    get_chip_distribution,
 )
 
 
@@ -72,3 +77,45 @@ class TestSentimentAnalysis:
         assert len(NEGATION_WORDS) >= 5
         assert len(DEGREE_WORDS) >= 5
         assert len(TRANSITION_WORDS) >= 3
+
+
+class TestDataAPIs:
+
+    def test_get_realtime_quote_returns_dict(self):
+        result = get_realtime_quote("600519")
+        assert isinstance(result, dict)
+
+    def test_get_realtime_quote_sh_code(self):
+        result = get_realtime_quote("600519")
+        if result:
+            assert result.get("code") == "600519"
+            assert "price" in result
+
+    def test_get_realtime_quote_sz_code(self):
+        result = get_realtime_quote("000001")
+        if result:
+            assert result.get("code") == "000001"
+
+    def test_get_stock_changes_returns_list(self):
+        result = get_stock_changes()
+        assert isinstance(result, list)
+
+    def test_get_hot_tables_returns_list(self):
+        result = get_hot_tables()
+        assert isinstance(result, list)
+
+    def test_get_kline_data_returns_list(self):
+        result = get_kline_data("600519", period="101", start="20250501", end="20250530")
+        assert isinstance(result, list)
+
+    def test_get_kline_data_daily_format(self):
+        result = get_kline_data("600519", period="101", start="20250501", end="20250530")
+        if result:
+            first = result[0]
+            assert isinstance(first, str)
+            parts = first.split(",")
+            assert len(parts) >= 5
+
+    def test_get_chip_distribution_returns_dict(self):
+        result = get_chip_distribution("600519")
+        assert isinstance(result, dict)

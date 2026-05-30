@@ -244,62 +244,259 @@ class EastMoneyClient:
 # ── Real-time Market Data ────────────────────────────────────────────────
 
 def get_stock_changes() -> list[dict]:
-    """Get real-time stock anomalies (异动) from EastMoney.
+    """Get real-time stock data. Tries EastMoney, falls back to sorted Sina quotes."""
+    result = _em_stock_changes()
+    if result:
+        return result
+    return _sina_top_changes()
 
-    Returns list of anomaly dicts with stock code, name, type, price, change%.
-    22 anomaly types: 火箭发射, 快速反弹, 大笔买入, 封涨停板, etc.
-    """
+
+def _em_stock_changes() -> list[dict]:
+    """EastMoney quote list API for top movers."""
     try:
-        client = httpx.Client(timeout=_TIMEOUT)
-        resp = client.get("https://push2ex.eastmoney.com/get/qt=changes")
+        client = httpx.Client(timeout=_TIMEOUT, follow_redirects=True)
+        params = {
+            "pn": "1",
+            "pz": "20",
+            "po": "1",
+            "np": "1",
+            "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+            "fltt": "2",
+            "invt": "2",
+            "fid": "f3",
+            "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",
+            "fields": "f2,f3,f4,f5,f6,f7,f12,f14,f15,f16,f17",
+        }
+        resp = client.get(EM_QUOTE_API, params=params)
         resp.raise_for_status()
         data = resp.json()
+        diff = data.get("data", {}).get("diff", [])
         items = []
-        for item in data.get("data", {}).get("diff", []):
+        for item in diff:
             items.append({
-                "code": item.get("c", ""),
-                "name": item.get("n", ""),
-                "price": float(item.get("p", 0)),
-                "change_pct": float(item.get("zdp", 0)),
-                "volume": int(item.get("v", 0)),
+                "code": item.get("f12", ""),
+                "name": item.get("f14", ""),
+                "price": float(item.get("f2", 0) or 0),
+                "change_pct": float(item.get("f3", 0) or 0),
+                "volume": int(float(item.get("f6", 0) or 0)),
+                "amplitude": float(item.get("f7", 0) or 0),
+                "high": float(item.get("f15", 0) or 0),
+                "low": float(item.get("f16", 0) or 0),
             })
         return items
     except Exception as exc:
-        logger.warning("Stock changes API error: %s", _safe_err(exc))
+        logger.debug("EM stock changes fallback: %s", _safe_err(exc))
         return []
 
 
+def _sina_top_changes() -> list[dict]:
+    """Sina batch quote as fallback for top movers."""
+    codes = ["sh600519", "sz000001", "sz300750", "sh601318", "sz000858",
+             "sh600036", "sz000651", "sh601012", "sz002714", "sh600276",
+             "sz000333", "sh600887", "sz002415", "sh601166", "sz300059",
+             "sh600030", "sz000002", "sh601688", "sz002304", "sh600309"]
+    try:
+        headers = {
+            "Referer": "https://finance.sina.com.cn",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        client = httpx.Client(timeout=_TIMEOUT, headers=headers)
+        resp = client.get(f"https://hq.sinajs.cn/list={','.join(codes)}")
+        resp.raise_for_status()
+        items = []
+        for line in resp.text.strip().split("\n"):
+            match = re.search(r'hq_str_([a-z]+\d+)="([^"]*)"', line)
+            if not match:
+                continue
+            fields = match.group(2).split(",")
+            if len(fields) < 32:
+                continue
+            code = match.group(1)[2:]
+            name = fields[0]
+            prev_close = float(fields[2]) if fields[2] else 0
+            price = float(fields[3]) if fields[3] else 0
+            change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close > 0 else 0
+            items.append({
+                "code": code,
+                "name": name,
+                "price": price,
+                "change_pct": change_pct,
+                "volume": int(fields[8]) if fields[8] else 0,
+                "high": float(fields[4]) if fields[4] else 0,
+                "low": float(fields[5]) if fields[5] else 0,
+            })
+        items.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
+        return items[:20]
+    except Exception as exc:
+        logger.debug("Sina top changes fallback: %s", _safe_err(exc))
+        return []
+
+
+EM_HOT_TABLES_DC = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+
+
 def get_hot_tables(market: int = 1) -> list[dict]:
-    """Get Dragon Tiger List (龙虎榜) data.
+    """Get Dragon Tiger List (龙虎榜) data. Tries push2ex, then datacenter.
 
     Args:
         market: 1=A-stock, 2=HK, 3=US
     """
+    result = _em_hot_tables_push2ex(market)
+    if result:
+        return result
+    return _em_hot_tables_dc(market)
+
+
+def _em_hot_tables_push2ex(market: int) -> list[dict]:
+    """Original push2ex endpoint for Dragon Tiger List."""
     try:
-        client = httpx.Client(timeout=_TIMEOUT)
+        client = httpx.Client(timeout=_TIMEOUT, follow_redirects=True)
         params = {
             "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13,f14,f15,f16,f17,f18",
             "fields2": "f51,f52,f53,f54,f55",
-            "market": market,
         }
         resp = client.get("https://push2ex.eastmoney.com/get/qt=hot_tables", params=params)
+        if resp.status_code == 200:
+            data = resp.json()
+            diff = data.get("data", {}).get("diff", [])
+            if diff:
+                return diff
+        return []
+    except Exception:
+        return []
+
+
+def _em_hot_tables_dc(market: int) -> list[dict]:
+    """EastMoney datacenter API for Dragon Tiger List."""
+    market_map = {1: "沪A", 2: "港股", 3: "美股"}
+    try:
+        client = httpx.Client(timeout=_TIMEOUT, follow_redirects=True)
+        params = {
+            "reportName": "RPT_DAILYBOARD_DETAILS",
+            "columns": "ALL",
+            "pageNumber": "1",
+            "pageSize": "20",
+            "sortColumns": "TRADE_DATE",
+            "sortTypes": "-1",
+            "source": "WEB",
+            "client": "WEB",
+        }
+        if market == 1:
+            params["filter"] = '(MARKET="沪A")(MARKET="深A")(MARKET="创业板")'
+        elif market == 2:
+            params["filter"] = '(MARKET="港股")'
+        resp = client.get(EM_HOT_TABLES_DC, params=params)
         resp.raise_for_status()
         data = resp.json()
-        return data.get("data", {}).get("diff", [])
+        result = data.get("result", {})
+        if result and result.get("data"):
+            items = []
+            for row in result["data"][:20]:
+                items.append({
+                    "code": row.get("SECURITY_CODE", ""),
+                    "name": row.get("SECURITY_NAME_ABBR", ""),
+                    "close_price": row.get("CLOSE_PRICE", 0),
+                    "change_pct": row.get("CHANGE_RATE", 0),
+                    "net_buy": row.get("NET_BUY_AMT", 0),
+                    "buy_reason": row.get("EXPLAIN", ""),
+                    "date": row.get("TRADE_DATE", ""),
+                })
+            return items
+        return []
     except Exception as exc:
-        logger.warning("Hot tables API error: %s", _safe_err(exc))
+        logger.debug("Hot tables DC fallback: %s", _safe_err(exc))
+        return []
+
+
+def get_kline_data(stock_code: str, period: str = "101", start: str = "20250101", end: str = "20251231") -> list[str]:
+    """Get K-line (candlestick) data. Tries EastMoney first, falls back to Tencent.
+
+    Args:
+        stock_code: 6-digit stock code
+        period: klt=101 for daily, 102 for weekly, 103 for monthly
+        start: start date YYYYMMDD
+        end: end date YYYYMMDD
+    """
+    result = _em_kline(stock_code, period, start, end)
+    if result:
+        return result
+    return _tencent_kline(stock_code, period)
+
+
+def _em_kline(stock_code: str, period: str, start: str, end: str) -> list[str]:
+    """EastMoney K-line API."""
+    secid = f"1.{stock_code}" if stock_code.startswith(("6", "9")) else f"0.{stock_code}"
+    try:
+        client = httpx.Client(timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=30.0), follow_redirects=True)
+        params = {
+            "secid": secid,
+            "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": period,
+            "fqt": "1",
+            "beg": start,
+            "end": end,
+            "ut": "fa5fd1943c7b386f172d6893dbbd0320",
+        }
+        resp = client.get(EM_KLINE_API, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("data", {}).get("klines", [])
+    except Exception as exc:
+        logger.debug("EM K-line fallback: %s", _safe_err(exc))
+        return []
+
+
+def _tencent_kline(stock_code: str, period: str) -> list[str]:
+    """Tencent Finance K-line API as fallback."""
+    period_map = {"101": "day", "102": "week", "103": "month"}
+    klt = period_map.get(period, "day")
+    prefix = "sh" if stock_code.startswith(("6", "9")) else "sz"
+    tencent_code = f"{prefix}{stock_code}"
+    try:
+        client = httpx.Client(timeout=httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=20.0))
+        params = {"param": f"{tencent_code},{klt},,,300,qfq"}
+        resp = client.get("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        stock_data = data.get("data", {}).get(tencent_code, {})
+        klines_raw = stock_data.get(klt, stock_data.get("qfq" + klt, []))
+        if not klines_raw:
+            return []
+        result = []
+        for row in klines_raw:
+            if isinstance(row, list) and len(row) >= 6:
+                date_str = str(row[0])
+                open_p = row[1]
+                close_p = row[2]
+                high_p = row[3]
+                low_p = row[4]
+                vol = row[5]
+                result.append(f"{date_str},{open_p},{close_p},{high_p},{low_p},{vol}")
+        return result
+    except Exception as exc:
+        logger.warning("Tencent K-line error for %s: %s", stock_code, _safe_err(exc))
         return []
 
 
 def get_chip_distribution(stock_code: str) -> dict[str, Any]:
     """Get chip/cost distribution (筹码分布) for a stock.
 
-    Shows how shares are distributed across price levels.
+    Tries EastMoney first, falls back to Tencent cost distribution estimate.
     """
+    result = _em_chip_distribution(stock_code)
+    if result:
+        return result
+    return _tencent_chip_estimate(stock_code)
+
+
+def _em_chip_distribution(stock_code: str) -> dict[str, Any]:
+    """EastMoney chip distribution API."""
+    secid = f"1.{stock_code}" if stock_code.startswith(("6", "9")) else f"0.{stock_code}"
     try:
-        client = httpx.Client(timeout=_TIMEOUT)
+        client = httpx.Client(timeout=_TIMEOUT, follow_redirects=True)
         params = {
-            "secid": f"1.{stock_code}" if stock_code.startswith("6") else f"0.{stock_code}",
+            "secid": secid,
             "fields1": "f1,f2,f3,f4,f5,f6,f7",
             "fields2": "f51,f52,f53,f54,f55",
         }
@@ -308,20 +505,67 @@ def get_chip_distribution(stock_code: str) -> dict[str, Any]:
         data = resp.json()
         return data.get("data", {})
     except Exception as exc:
-        logger.warning("Chip distribution API error: %s", _safe_err(exc))
+        logger.debug("EM chip distribution fallback: %s", _safe_err(exc))
+        return {}
+
+
+def _tencent_chip_estimate(stock_code: str) -> dict[str, Any]:
+    """Estimate chip distribution from Tencent K-line data based on recent price range."""
+    prefix = "sh" if stock_code.startswith(("6", "9")) else "sz"
+    tencent_code = f"{prefix}{stock_code}"
+    try:
+        client = httpx.Client(timeout=httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=20.0))
+        params = {"param": f"{tencent_code},day,,,60,qfq"}
+        resp = client.get("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        stock_data = data.get("data", {}).get(tencent_code, {})
+        klines = stock_data.get("day", stock_data.get("qfqday", []))
+        if not klines or len(klines) < 5:
+            return {"source": "tencent_estimate", "code": stock_code, "prices": [], "volumes": []}
+        prices = []
+        volumes = []
+        for row in klines[-60:]:
+            if isinstance(row, list) and len(row) >= 6:
+                prices.append(float(row[2]))
+                volumes.append(float(row[5]))
+        if not prices:
+            return {"source": "tencent_estimate", "code": stock_code, "prices": [], "volumes": []}
+        price_min = min(prices)
+        price_max = max(prices)
+        price_avg = sum(prices) / len(prices)
+        vol_avg = sum(volumes) / len(volumes) if volumes else 0
+        return {
+            "source": "tencent_estimate",
+            "code": stock_code,
+            "price_range": [round(price_min, 2), round(price_max, 2)],
+            "price_avg": round(price_avg, 2),
+            "vol_avg": round(vol_avg, 0),
+            "data_len": len(klines),
+        }
+    except Exception as exc:
+        logger.debug("Tencent chip estimate fallback: %s", _safe_err(exc))
         return {}
 
 
 def get_realtime_quote(stock_code: str) -> dict[str, Any]:
-    """Get real-time stock quote from Sina Finance.
+    """Get real-time stock quote. Tries Sina first, falls back to EastMoney."""
+    result = _sina_quote(stock_code)
+    if result:
+        return result
+    return _em_quote(stock_code)
 
-    Args:
-        stock_code: 6-digit stock code (e.g. "600519" for 贵州茅台)
-    """
+
+def _sina_quote(stock_code: str) -> dict[str, Any]:
+    """Fetch quote from Sina Finance (requires Referer header)."""
     prefix = "sh" if stock_code.startswith(("6", "9")) else "sz"
     sina_code = f"{prefix}{stock_code}"
     try:
-        client = httpx.Client(timeout=_TIMEOUT)
+        headers = {
+            "Referer": "https://finance.sina.com.cn",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        }
+        client = httpx.Client(timeout=_TIMEOUT, headers=headers)
         resp = client.get(f"https://hq.sinajs.cn/list={sina_code}")
         resp.raise_for_status()
         raw = resp.text
@@ -344,7 +588,43 @@ def get_realtime_quote(stock_code: str) -> dict[str, Any]:
             "change_pct": round((float(fields[3]) - float(fields[2])) / float(fields[2]) * 100, 2) if fields[2] and float(fields[2]) > 0 else 0,
         }
     except Exception as exc:
-        logger.warning("Quote API error for %s: %s", stock_code, _safe_err(exc))
+        logger.debug("Sina quote fallback for %s: %s", stock_code, _safe_err(exc))
+        return {}
+
+
+def _em_quote(stock_code: str) -> dict[str, Any]:
+    """Fetch quote from EastMoney push2 API as fallback."""
+    secid = f"1.{stock_code}" if stock_code.startswith(("6", "9")) else f"0.{stock_code}"
+    try:
+        client = httpx.Client(timeout=_TIMEOUT)
+        params = {
+            "secid": secid,
+            "fields": "f43,f44,f45,f46,f47,f48,f50,f51,f52,f55,f57,f58,f60,f107,f170",
+            "ut": "fa5fd1943c7b386f172d6893dbbd0320",
+        }
+        resp = client.get(EM_QUOTE_API, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        d = data.get("data", {})
+        if not d:
+            return {}
+        prev_close = float(d.get("f60", 0) or 0)
+        price = float(d.get("f43", 0) or 0)
+        change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close > 0 else 0
+        return {
+            "code": d.get("f57", stock_code),
+            "name": d.get("f58", ""),
+            "open": float(d.get("f46", 0) or 0),
+            "prev_close": prev_close,
+            "price": price,
+            "high": float(d.get("f44", 0) or 0),
+            "low": float(d.get("f45", 0) or 0),
+            "volume": int(d.get("f47", 0) or 0),
+            "amount": float(d.get("f48", 0) or 0),
+            "change_pct": change_pct,
+        }
+    except Exception as exc:
+        logger.warning("EM quote fallback error for %s: %s", stock_code, _safe_err(exc))
         return {}
 
 
