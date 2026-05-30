@@ -8,6 +8,7 @@
 
 | 版本 | 下载链接 | 大小 | 主要更新 |
 |------|----------|------|----------|
+| **v1.14.0** | [⬇️ 下载](https://github.com/lopaycn-boop/GBTxiaotudouquannengcaopanshou/releases/download/v1.14.0/AI.Setup.1.14.0.exe) | 73.2MB | 📈K线图 / 💼持仓仪表盘 / 🎯策略编辑器 |
 | **v1.13.0** | [⬇️ 下载](https://github.com/lopaycn-boop/GBTxiaotudouquannengcaopanshou/releases/download/v1.13.0/AI.Setup.1.13.0.exe) | 73.2MB | ⌨️快捷键帮助 / 🖱️右键菜单 / 📂拖放密钥 / Tooltip |
 | v1.12.0 | [⬇️ 下载](https://github.com/lopaycn-boop/GBTxiaotudouquannengcaopanshou/releases/download/v1.12.0/AI.Setup.1.12.0.exe) | 73.1MB | ⌘命令面板 / 📌消息置顶 / ARIA无障碍 |
 | v1.11.0 | [⬇️ 下载](https://github.com/lopaycn-boop/GBTxiaotudouquannengcaopanshou/releases/download/v1.11.0/AI.Setup.1.11.0.exe) | 73.1MB | 📋消息操作 / 🔍聊天搜索 / ↔️拖拽调宽 |
@@ -59,7 +60,7 @@
 
 ## 📋 当前版本
 
-**v1.13.0** — 66 项功能 | 204 测试全绿 | Apache-2.0 © 自由的风
+**v1.14.0** — 69 项功能 | 204 测试全绿 | Apache-2.0 © 自由的风
 
 ## ⚠️ 免责声明
 
