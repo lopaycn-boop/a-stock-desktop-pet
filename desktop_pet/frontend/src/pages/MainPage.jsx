@@ -44,6 +44,10 @@ import VoiceWaveform from '../components/VoiceWaveform';
 import StatusBar from '../components/StatusBar';
 import SettingsBackup from '../components/SettingsBackup';
 import PerfMonitor from '../components/PerfMonitor';
+import EmojiPicker from '../components/EmojiPicker';
+import NotifFilterPanel from '../components/NotifFilterPanel';
+import useSmartReconnect from '../hooks/useSmartReconnect';
+import useNotificationFilter from '../hooks/useNotificationFilter';
 
 function formatTs(ts) {
   if (!ts) return '';
@@ -993,7 +997,8 @@ case 'billing_renewal_payment': {
     const items = [
       { icon: '📋', label: '粘贴并发送', shortcut: 'Ctrl+V', action: () => { navigator.clipboard.readText().then(t => { if (t?.trim()) { sendPacket({ type: 'text_input', payload: { text: t.trim() } }); setChatOpen(true); } }); }},
       { icon: '🔍', label: '搜索聊天', shortcut: 'Ctrl+F', action: () => setShowChatSearch(true) },
-      { icon: '💾', label: '导出聊天', shortcut: 'Ctrl+E', action: handleExportChat },
+      { icon: '💾', label: '导出聊天(TXT)', shortcut: 'Ctrl+E', action: () => handleExportChat('txt') },
+      { icon: '📝', label: '导出聊天(MD)', shortcut: 'Ctrl+Shift+E', action: () => handleExportChat('md') },
       { sep: true },
       { icon: '🌙', label: effectiveTheme === 'dark' ? '切换浅色' : '切换深色', shortcut: 'Ctrl+D', action: cycleTheme },
       { icon: '🌐', label: isZh ? 'Switch to English' : '切换到中文', shortcut: 'Ctrl+L', action: () => switchLang(isZh ? 'en' : 'zh') },
@@ -1147,14 +1152,30 @@ case 'billing_renewal_payment': {
     });
   }, []);
 
-  const handleExportChat = useCallback(() => {
-    const text = messages.map(m => `[${formatTs(m.ts)}] ${m.type}: ${typeof m.content === 'string' ? m.content : ''}`).join('\n');
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `potato-chat-${new Date().toISOString().slice(0, 10)}.txt`;
-    a.click(); URL.revokeObjectURL(url);
-    showToast('聊天已导出', 'success');
+  const handleExportChat = useCallback((format = 'txt') => {
+    if (format === 'md') {
+      const md = messages.map(m => {
+        const role = m.type === 'user' ? '**🧑**' : '**🥔**';
+        const ts = `*${formatTs(m.ts)}*`;
+        const content = typeof m.content === 'string' ? m.content : '';
+        return `${role} ${ts}\n\n${content}`;
+      }).join('\n\n---\n\n');
+      const header = `# 🥔 小土豆 AI操盘桌宠 — 聊天记录\n\n*导出时间: ${new Date().toLocaleString()}*\n\n---\n\n`;
+      const blob = new Blob([header + md], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `potato-chat-${new Date().toISOString().slice(0, 10)}.md`;
+      a.click(); URL.revokeObjectURL(url);
+      showToast('Markdown导出成功', 'success');
+    } else {
+      const text = messages.map(m => `[${formatTs(m.ts)}] ${m.type}: ${typeof m.content === 'string' ? m.content : ''}`).join('\n');
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `potato-chat-${new Date().toISOString().slice(0, 10)}.txt`;
+      a.click(); URL.revokeObjectURL(url);
+      showToast('聊天已导出', 'success');
+    }
   }, [messages]);
 
   const handleCommandAction = useCallback((action) => {
@@ -1486,8 +1507,9 @@ case 'billing_renewal_payment': {
         <StatusBar systemStatus={systemStatus} connected={connected} currentModel={currentModel} lang={isZh ? 'zh' : 'en'} />
         <PerfMonitor lang={isZh ? 'zh' : 'en'} />
 
-        <div className="chat-input-row">
+        <div className="chat-input-row" style={{ position: 'relative' }}>
           {recording && <VoiceWaveform isRecording={recording} onStop={() => setRecording(false)} />}
+          <EmojiPicker onSelect={emoji => setInputText(prev => prev + emoji)} lang={isZh ? 'zh' : 'en'} />
           <textarea
             value={inputText}
             onChange={e => setInputText(e.target.value)}
@@ -1573,6 +1595,7 @@ case 'billing_renewal_payment': {
               sendPacket={sendPacket}
             />
             <SettingsBackup onImport={() => window.location.reload()} lang={isZh ? 'zh' : 'en'} />
+            <NotifFilterPanel lang={isZh ? 'zh' : 'en'} />
           </div>
         </div>
       )}

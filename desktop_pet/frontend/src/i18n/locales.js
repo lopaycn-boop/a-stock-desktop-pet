@@ -73,6 +73,21 @@ const zh = {
     fps: '帧率',
     memory: '内存',
   },
+  emoji: {
+    title: '选择表情',
+  },
+  notif_filter: {
+    title: '🔔 通知过滤',
+    trade: '交易',
+    risk: '风险',
+    info: '信息',
+    system: '系统',
+  },
+  export: {
+    txt: '导出聊天(TXT)',
+    md: '导出聊天(MD)',
+    md_success: 'Markdown导出成功',
+  },
 };
 
 const en = {
@@ -149,6 +164,21 @@ const en = {
   perf: {
     fps: 'FPS',
     memory: 'Memory',
+  },
+  emoji: {
+    title: 'Pick Emoji',
+  },
+  notif_filter: {
+    title: '🔔 Notification Filters',
+    trade: 'Trade',
+    risk: 'Risk',
+    info: 'Info',
+    system: 'System',
+  },
+  export: {
+    txt: 'Export Chat (TXT)',
+    md: 'Export Chat (MD)',
+    md_success: 'Markdown exported!',
   },
 };
 

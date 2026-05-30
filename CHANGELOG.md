@@ -2,6 +2,21 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.18.0] - 2025-05-30
+
+### New Features
+- **Emoji Quick Picker**: Emoji panel with 3 categories (faces, trading, pets), click to insert into input
+- **Notification Filter**: Toggle notification types (trade/risk/info/system) in Settings, with icons and color codes
+- **Chat Markdown Export**: Export chat as formatted .md file with role labels and timestamps
+- **Smart Reconnect Hook**: Standalone exponential-backoff reconnect utility (useNeuroSocket already has this)
+- **83 total features registered**
+
+### UX
+- Emoji button next to input field, 20 emojis per category
+- NotifFilterPanel integrated into Settings overlay
+- Export command palette shows both TXT and MD options
+- Markdown export includes header with export timestamp
+
 ## [1.17.0] - 2025-05-30
 
 ### New Features
