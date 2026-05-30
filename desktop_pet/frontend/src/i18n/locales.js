@@ -63,6 +63,16 @@ const zh = {
     live2d: '加载模型...',
     ready: '就绪！',
   },
+  backup: {
+    title: '💾 设置备份与恢复',
+    export: '导出设置',
+    import: '导入设置',
+    desc: '导出所有设置、聊天记录和置顶消息到文件，或从文件恢复。',
+  },
+  perf: {
+    fps: '帧率',
+    memory: '内存',
+  },
 };
 
 const en = {
@@ -129,6 +139,16 @@ const en = {
     ws: 'Establishing channel...',
     live2d: 'Loading model...',
     ready: 'Ready!',
+  },
+  backup: {
+    title: '💾 Settings Backup',
+    export: 'Export Settings',
+    import: 'Import Settings',
+    desc: 'Export all settings, chat history and pinned messages to a file, or restore from file.',
+  },
+  perf: {
+    fps: 'FPS',
+    memory: 'Memory',
   },
 };
 

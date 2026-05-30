@@ -2,6 +2,24 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.17.0] - 2025-05-30
+
+### New Features
+- **Settings Backup & Restore**: Export/import all settings, chat history, and pinned messages as JSON file
+- **Performance Monitor**: Debug FPS counter and memory usage overlay (Dev mode only)
+- **Crash Auto-Restart**: Renderer process auto-restarts up to 3 times on crash
+- **Code Block Rendering**: ```language code blocks rendered with syntax label, monospace font, scrollable
+- **Inline Code Rendering**: `code` spans styled with monospace background
+- **Settings Panel Overlay**: Settings now shows in centered modal overlay with backup section
+- **79 total features registered**
+
+### UX
+- Settings panel with backup section built-in, one-click export/download
+- Import restores all localStorage keys and auto-reloads
+- Code blocks show language label header, dark background, horizontal scroll
+- Crash recovery with 2-second delay, resets on successful load
+- FPS monitor shows green/yellow/red based on frame rate
+
 ## [1.16.0] - 2025-05-30
 
 ### New Features

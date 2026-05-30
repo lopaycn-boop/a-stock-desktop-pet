@@ -33,3 +33,8 @@ def test_features_list():
     assert "demo_mode" in FEATURES
     assert "risk_control" in FEATURES
     assert "vault_encryption" in FEATURES
+    assert "settings_backup" in FEATURES
+    assert "perf_monitor" in FEATURES
+    assert "crash_auto_restart" in FEATURES
+    assert "code_block_rendering" in FEATURES
+    assert "inline_code_rendering" in FEATURES

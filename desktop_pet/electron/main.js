@@ -10,6 +10,8 @@ let mainWindow = null;
 let tray = null;
 let backendProc = null;
 let isQuitting = false;
+let crashRestartCount = 0;
+const MAX_CRASH_RESTARTS = 3;
 
 let BACKEND_PORT = parseInt(process.env.PET_BACKEND_PORT || '8000', 10);
 const FRONTEND_PORT = 5173;
@@ -283,6 +285,7 @@ function createWindow() {
 
   // Make window draggable from .app region, pass-through elsewhere
   mainWindow.webContents.on('did-finish-load', () => {
+    crashRestartCount = 0;
     mainWindow.webContents.executeJavaScript(`
       document.querySelectorAll('.app').forEach(el => {
         el.style['-webkit-app-region'] = 'drag';
@@ -300,6 +303,31 @@ function createWindow() {
           window.dispatchEvent(new CustomEvent('backend-port-ready', { detail: ${BACKEND_PORT} }));
         }
       `);
+    }
+  });
+
+  // ── Crash auto-restart ──
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    if (isQuitting) return;
+    console.error('[electron] Renderer crashed:', details.reason);
+    if (crashRestartCount < MAX_CRASH_RESTARTS) {
+      crashRestartCount++;
+      console.log(`[electron] Auto-restarting renderer (${crashRestartCount}/${MAX_CRASH_RESTARTS})...`);
+      setTimeout(() => {
+        try { mainWindow.reload(); } catch {}
+      }, 2000);
+    } else {
+      console.error('[electron] Max crash restarts reached, giving up.');
+    }
+  });
+
+  mainWindow.webContents.on('crashed', (_event, killed) => {
+    if (isQuitting || killed) return;
+    if (crashRestartCount < MAX_CRASH_RESTARTS) {
+      crashRestartCount++;
+      setTimeout(() => {
+        try { mainWindow.reload(); } catch {}
+      }, 2000);
     }
   });
 

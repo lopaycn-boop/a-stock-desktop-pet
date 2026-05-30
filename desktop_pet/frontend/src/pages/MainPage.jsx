@@ -42,6 +42,8 @@ import ModelSwitcherPanel from '../components/ModelSwitcherPanel';
 import useTypingEffect from '../hooks/useTypingEffect';
 import VoiceWaveform from '../components/VoiceWaveform';
 import StatusBar from '../components/StatusBar';
+import SettingsBackup from '../components/SettingsBackup';
+import PerfMonitor from '../components/PerfMonitor';
 
 function formatTs(ts) {
   if (!ts) return '';
@@ -1482,6 +1484,7 @@ case 'billing_renewal_payment': {
         </div>
 
         <StatusBar systemStatus={systemStatus} connected={connected} currentModel={currentModel} lang={isZh ? 'zh' : 'en'} />
+        <PerfMonitor lang={isZh ? 'zh' : 'en'} />
 
         <div className="chat-input-row">
           {recording && <VoiceWaveform isRecording={recording} onStop={() => setRecording(false)} />}
@@ -1554,22 +1557,26 @@ case 'billing_renewal_payment': {
       )}
 
       {showSettings && (
-        <SettingsPanel
-          onClose={() => setShowSettings(false)}
-          wakeListening={wakeListening}
-          toggleWakeWord={wakeListening ? stopWakeListener : startWakeListener}
-          alwaysOnTop={alwaysOnTop}
-          onToggleAlwaysOnTop={() => {
-            const next = !alwaysOnTop;
-            setAlwaysOnTop(next);
-            if (window.potatoAPI?.setAlwaysOnTop) window.potatoAPI.setAlwaysOnTop(next);
-          }}
-          messages={messages}
-          sendPacket={sendPacket}
-        />
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100001, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowSettings(false)}>
+          <div style={{ background: 'var(--bg-secondary)', borderRadius: 16, border: '1px solid var(--border)', maxWidth: 380, width: '90%', maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+            <SettingsPanel
+              onClose={() => setShowSettings(false)}
+              wakeListening={wakeListening}
+              toggleWakeWord={wakeListening ? stopWakeListener : startWakeListener}
+              alwaysOnTop={alwaysOnTop}
+              onToggleAlwaysOnTop={() => {
+                const next = !alwaysOnTop;
+                setAlwaysOnTop(next);
+                if (window.potatoAPI?.setAlwaysOnTop) window.potatoAPI.setAlwaysOnTop(next);
+              }}
+              messages={messages}
+              sendPacket={sendPacket}
+            />
+            <SettingsBackup onImport={() => window.location.reload()} lang={isZh ? 'zh' : 'en'} />
+          </div>
+        </div>
       )}
 
-      {showTradeHistory && (
         <TradeHistoryPanel
           onClose={() => setShowTradeHistory(false)}
           sendPacket={sendPacket}

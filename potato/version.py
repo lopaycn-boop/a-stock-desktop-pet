@@ -1,6 +1,6 @@
 """Version information for 小土豆 AI操盘桌宠."""
 
-__version__ = "1.16.0"
+__version__ = "1.17.0"
 __author__ = "自由的风"
 BUILD = "20250530"
 
@@ -26,4 +26,5 @@ FEATURES = [
     "stock_chart", "portfolio_dashboard", "strategy_editor",
     "model_switcher_panel", "typing_effect", "tray_menu",
     "voice_waveform", "status_bar",
+    "settings_backup", "perf_monitor", "crash_auto_restart", "code_block_rendering", "inline_code_rendering",
 ]
