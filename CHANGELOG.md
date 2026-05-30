@@ -4,16 +4,23 @@ All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
 ## [1.0.2] - 2025-05-30
 
+### Security Fixes
+- **Critical**: Bind backend to `127.0.0.1` instead of `0.0.0.0` — no LAN exposure
+- **High**: Disable Swagger/ReDoc docs (`docs_url=None, redoc_url=None`) — no API surface leak
+- **High**: Remove `python` and `taskkill` from IPC command allowlist — prevents arbitrary code execution
+- **High**: Set `shell: false` on backend and agent child process spawns — prevents shell injection
+- **Medium**: Mask API keys in `/verify` output — redacts `sk-*`, `key=*`, `token=*` patterns
+- **Medium**: Dynamic CORS whitelist — auto-matches actual backend port (8000-8009)
+
 ### Bug Fixes
-- **Critical**: Add missing `import uvicorn` in `__main__` block — backend failed to start after port fallback edit
-- **Critical**: `BACKEND_PORT` changed from `const` to `let` — alternate port assignment was silently ignored
-- **High**: Fix frontend WS race condition — port was injected after page load, causing connection to wrong port
-- Frontend `backendPort` is now React state with `backend-port-ready` event listener for dynamic reconnection
+- **Critical**: Add missing `import uvicorn` in `__main__` block — backend failed to start
+- **Critical**: `BACKEND_PORT` changed from `const` to `let` — port fallback assignment was silently ignored
+- **High**: Fix frontend WS race condition — port now injected in `did-finish-load` via CustomEvent, not after createWindow
 
 ### Features
-- **Auto port fallback**: Backend automatically finds available port (8000–8009) if preferred port is occupied
-- **Dynamic port detection**: Electron scans 8000–8009 for backend after spawn, injects port into frontend via CustomEvent
-- Frontend WS auto-reconnects when Electron announces new backend port
+- **Auto port fallback**: Backend finds available port 8000-8009 if preferred is occupied
+- **Dynamic port detection**: Electron scans for backend port, frontend reconnects on `backend-port-ready`
+- Backend startup banner now shows the actual port (reads `$PORT` env)
 
 ## [1.0.1] - 2025-05-30
 

@@ -162,7 +162,7 @@ function _spawnAgent() {
     cwd: path.dirname(agentScript),
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: true,
+    shell: false,
   });
   agentProc.stdout.on('data', (data) => {
     console.log(`[agent] ${data.toString().trim()}`);
@@ -212,7 +212,7 @@ function _spawnBackend() {
     cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: true,
+    shell: false,
   });
 
   backendProc.stdout.on('data', (data) => {
@@ -352,10 +352,8 @@ function setAutoStart(enable = true) {
 // ── IPC handlers for system control (allowlisted commands only) ──
 const ALLOWED_COMMANDS = {
   cleanmgr: { args: ['/d', 'C'] },
-  taskkill: null,
   systeminfo: null,
   ping: null,
-  python: null,
 };
 
 function isCommandAllowed(cmd) {

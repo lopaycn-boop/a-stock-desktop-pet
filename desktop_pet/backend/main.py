@@ -110,7 +110,7 @@ async def lifespan(app: FastAPI):
         "║     Author: {}                          ║".format(__author__),
         "║     Build: {}                           ║".format(BUILD),
         "╠══════════════════════════════════════════════╣",
-        "║  后端 :8000  │  前端 :5173  │  Agent :9991 ║",
+        "║  后端 :{port}  │  前端 :5173  │  Agent :9991 ║".format(port=os.getenv("PORT", "8000")),
         "╠══════════════════════════════════════════════╣",
         "║  数据源: DeepSeek│东方财富│问财选股│新浪财经  ║",
         "║  引 擎: 5层LLM│PlanExecute│6Agent│DemoMode ║",
@@ -200,14 +200,23 @@ app = FastAPI(
     title="Potato Desktop Pet",
     description="OpenClaw Pi + DeepSeek + Browser Automation Desktop Pet",
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
 )
 
-_ORIGIN_WHITELIST = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-]
+_DYNAMIC_ORIGINS: list[str] = []
+
+def _build_cors_origins(port: int) -> list[str]:
+    return [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        f"http://localhost:{port}",
+        f"http://127.0.0.1:{port}",
+        "http://localhost",
+        "http://127.0.0.1",
+    ]
+
+_ORIGIN_WHITELIST = _build_cors_origins(8000)
 
 app.add_middleware(
     CORSMiddleware,
@@ -606,15 +615,18 @@ def version():
 @app.get("/verify")
 def verify():
     from potato.verify import verify as _verify
-    import io, sys
+    import io, sys, re
     old_stdout = sys.stdout
     sys.stdout = io.StringIO()
     try:
         ok = _verify()
         output = sys.stdout.getvalue()
+        output = re.sub(r'(sk-[a-zA-Z0-9]{4})[a-zA-Z0-9]+([a-zA-Z0-9]{4})', r'\1***\2', output)
+        output = re.sub(r'(key[a-z_]*[=:]\s*)[a-zA-Z0-9\-_]{8,}', r'\1***', output, flags=re.IGNORECASE)
+        output = re.sub(r'(token[a-z_]*[=:]\s*)[a-zA-Z0-9\-_\.]{8,}', r'\1***', output, flags=re.IGNORECASE)
     except Exception as e:
         ok = False
-        output = str(e)
+        output = _safe_error(e)
     finally:
         sys.stdout = old_stdout
     return JSONResponse({"ok": ok, "output": output})
@@ -3325,9 +3337,12 @@ if __name__ == "__main__":
     port = _find_available_port(preferred_port)
     if port != preferred_port:
         logger.warning("Port %d busy, using %d instead", preferred_port, port)
+    # Update CORS origins to match actual port
+    _ORIGIN_WHITELIST.clear()
+    _ORIGIN_WHITELIST.extend(_build_cors_origins(port))
     uvicorn.run(
         app,
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=port,
         lifespan="on",
         loop="asyncio",
