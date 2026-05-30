@@ -1,6 +1,6 @@
 """Version information for 小土豆 AI操盘桌宠."""
 
-__version__ = "1.20.1"
+__version__ = "1.20.2"
 __author__ = "自由的风"
 BUILD = "20250530"
 

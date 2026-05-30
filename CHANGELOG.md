@@ -2,6 +2,15 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.20.2] - 2025-05-30
+
+### Bug Fix
+- **Path with spaces**: Quote Python and script paths in spawn() for `C:\Program Files\` compatibility
+- **Python discovery**: Added LOCALAPPDATA Python paths, use execSync for reliable detection
+- **Backend port discovery**: Validate `/version` (potato-specific) instead of `/health` to avoid false positives
+- **PYTHONPATH**: Include `resources/potato` module path for packaged app
+- **Port scan**: Scan 8000-8009 for actual potato backend instead of assuming default
+
 ## [1.20.1] - 2025-05-30
 
 ### Bug Fix

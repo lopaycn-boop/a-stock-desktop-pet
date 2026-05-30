@@ -111,6 +111,7 @@ function findBackendPort(startPort = 8000, maxTries = 10) {
 
 // ── Find Python ──
 function findPython() {
+  const { execSync } = require('child_process');
   const candidates = [
     process.env.PYTHON_PATH,
     path.join(process.resourcesPath || '', 'python', 'python.exe'),
@@ -119,14 +120,19 @@ function findPython() {
     'C:\\Python312\\python.exe',
     'C:\\Python311\\python.exe',
     'C:\\Python310\\python.exe',
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'python.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python310', 'python.exe'),
   ].filter(Boolean);
 
   for (const p of candidates) {
     try {
-      const result = spawn(p, ['--version'], { stdio: 'pipe', shell: true });
-      if (result.status === 0) return p;
+      execSync(`"${p}" --version`, { stdio: 'pipe', timeout: 5000, shell: true });
+      console.log(`[electron] Found Python at: ${p}`);
+      return p;
     } catch(e) {}
   }
+  console.error('[electron] Python not found, backend will not start');
   return 'python';
 }
 
@@ -134,15 +140,22 @@ function findPython() {
 function startBackend() {
   // Dev mode: if backend is already running on BACKEND_PORT, skip spawning
   const http = require('http');
-  const req = http.get(`http://127.0.0.1:${BACKEND_PORT}/health`, (res) => {
-    res.resume();
-    if (res.statusCode === 200) {
-      console.log(`[electron] Backend already running on port ${BACKEND_PORT}, skipping spawn`);
-      return;
-    }
-    _spawnBackend();
+  const req = http.get(`http://127.0.0.1:${BACKEND_PORT}/version`, (res) => {
+    let body = '';
+    res.on('data', (d) => body += d);
+    res.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        if (data.version && data.features) {
+          console.log(`[electron] Potato backend already running on port ${BACKEND_PORT}, skipping spawn`);
+          return;
+        }
+      } catch {}
+      _spawnBackend();
+    });
   });
   req.on('error', () => { _spawnBackend(); });
+  req.setTimeout(3000, () => { req.destroy(); _spawnBackend(); });
   req.end();
 }
 
@@ -172,7 +185,7 @@ function _spawnAgent() {
   }
   const agentPort = process.env.BYTEBOT_AGENT_PORT || '9991';
   const env = { ...process.env, BYTEBOT_AGENT_PORT: agentPort };
-  agentProc = spawn(python, [agentScript], {
+  agentProc = spawn(python, [`"${agentScript}"`], {
     cwd: path.dirname(agentScript),
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -217,6 +230,7 @@ function _spawnBackend() {
   env.PORT = String(BACKEND_PORT);
   env.PYTHONPATH = [
     path.join(__dirname, '..', '..'),
+    path.join(process.resourcesPath || path.join(__dirname, '..'), 'potato'),
     path.join(__dirname, '..', 'backend'),
   ].join(path.delimiter) + (env.PYTHONPATH ? path.delimiter + env.PYTHONPATH : '');
 
@@ -225,7 +239,7 @@ function _spawnBackend() {
     : mainPy;
   const cwd = path.dirname(mainPyPath);
 
-  backendProc = spawn(python, [mainPyPath], {
+  backendProc = spawn(python, [`"${mainPyPath}"`], {
     cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
