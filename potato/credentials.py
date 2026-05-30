@@ -109,9 +109,9 @@ class CredentialsPlugin:
 
         encryption_active = _get_cipher() is not None and _get_cipher() != "FALLBACK"
         if not encryption_active:
-            logger.warning(
-                "Credentials stored WITHOUT proper encryption (cryptography package missing). "
-                "Install with: pip install cryptography"
+            raise RuntimeError(
+                "Credentials storage requires the 'cryptography' package for Fernet encryption. "
+                "Refusing to store credentials unencrypted. Run: pip install cryptography"
             )
 
         with self.db.connect() as conn:
@@ -167,7 +167,8 @@ class CredentialsPlugin:
             raw = "{}"
         try:
             fields = json.loads(_decrypt(raw))
-        except Exception:
+        except Exception as exc:
+            logger.error("Credential decryption failed for platform %s: %s — refusing to return data", platform_id, exc)
             fields = {}
         auto_val = d.get("autonomous", 0)
         autonomous = bool(auto_val) if not isinstance(auto_val, bool) else auto_val

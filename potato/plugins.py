@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -45,6 +46,12 @@ from typing import Any
 import httpx
 
 logger = logging.getLogger("potato.plugins")
+
+_RE_UNSAFE_SHELL = re.compile(r"[\n\r\x00-\x1f`$\\!;&|<>]")
+
+def _sanitize_prompt(prompt: str, max_len: int = 4000) -> str:
+    prompt = _RE_UNSAFE_SHELL.sub("", prompt)
+    return prompt[:max_len]
 
 # ── Plugin Registry ──────────────────────────────────────────────────────
 
@@ -152,6 +159,7 @@ def _ais_analyze(params: dict[str, Any]) -> dict[str, Any]:
     if output:
         prompt += f"Output:\n```\n{output[:2000]}\n```\n"
     prompt += "Please analyze this error, explain why it happened, and suggest how to fix it."
+    prompt = _sanitize_prompt(prompt)
 
     try:
         result = subprocess.run(
@@ -219,7 +227,7 @@ def _ais_learn(params: dict[str, Any]) -> dict[str, Any]:
     Params:
         topic: Learning topic (git, docker, vim, ssh, linux, etc.)
     """
-    topic = params.get("topic", "linux")
+    topic = _sanitize_prompt(str(params.get("topic", "linux")), max_len=100)
     if not _ais_available():
         return _ais_learn_fallback(params)
 

@@ -28,7 +28,7 @@ _MESSAGES: dict[str, list[dict]] = {}
 _lock = threading.Lock()
 
 app = FastAPI(title="Bytebot Agent (Built-in)", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8000", "http://127.0.0.1:8000"], allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8000", "http://127.0.0.1:8000"], allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["Content-Type", "Authorization"])
 
 _STATUS_ORDER = {"PENDING": 0, "RUNNING": 1, "NEEDS_HELP": 2, "NEEDS_REVIEW": 3,
                  "COMPLETED": 4, "FAILED": 5, "CANCELLED": 6}

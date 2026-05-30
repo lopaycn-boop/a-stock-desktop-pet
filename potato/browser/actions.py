@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from typing import Any
 
 from potato.browser.engine import BrowserEngine, _PLAYWRIGHT_AVAILABLE
@@ -20,6 +21,9 @@ from potato.browser.platforms import PlatformConfig, PlatformRegistry
 from potato.security import mask_secret
 
 logger = logging.getLogger("potato.browser.actions")
+
+_ALLOWED_TRADE_ACTIONS = {"navigate", "click", "fill", "wait", "screenshot", "read"}
+_URL_WHITELIST_RE = re.compile(r"^https?://([a-zA-Z0-9.-]+\.)?(eastmoney\.com|10jqka\.com\.cn|xueqiu\.com|localhost|127\.0\.0\.1)([:/]|$)", re.IGNORECASE)
 
 
 class BrowserTrader:
@@ -168,6 +172,19 @@ class BrowserTrader:
 
         for step in ai_instructions:
             step_action = step.get("action", "")
+            if step_action not in _ALLOWED_TRADE_ACTIONS:
+                results.append({"step": step_action, "ok": False, "error": f"blocked: action '{step_action}' not allowed"})
+                continue
+            if step_action == "navigate":
+                url = step.get("url", "")
+                if not _URL_WHITELIST_RE.match(url):
+                    results.append({"step": step_action, "ok": False, "error": f"blocked: URL not in whitelist: {url[:80]}"})
+                    continue
+            if step_action == "fill":
+                value = str(step.get("value", ""))
+                if len(value) > 1000:
+                    results.append({"step": step_action, "ok": False, "error": "blocked: fill value too long"})
+                    continue
             try:
                 if step_action == "navigate":
                     r = await self.engine.navigate(platform_id, step["url"])

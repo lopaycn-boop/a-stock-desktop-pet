@@ -102,7 +102,7 @@ PROVIDER_PRICING = {
 }
 
 
-DEFAULT_PLATFORM_WALLET = "TLyD5v9eTDp3mMzpYT3kprF6WdsUc3W99d"
+DEFAULT_PLATFORM_WALLET = ""
 
 
 @dataclass
@@ -405,9 +405,9 @@ class BillingManager:
         }
 
     def _get_platform_wallet(self) -> str:
-        """Read platform crypto wallet address from vault, fallback to default.
+        """Read platform crypto wallet address from vault.
 
-        Only called during renewal flow — never exposed otherwise.
+        Requires explicit configuration — no insecure default wallet address.
         """
         try:
             from potato.vault import Vault
@@ -421,9 +421,10 @@ class BillingManager:
             row = conn.execute(
                 "SELECT value FROM wallet_config WHERE key = 'platform_wallet'"
             ).fetchone()
-            if row:
+            if row and row[0]:
                 return row[0]
-        return DEFAULT_PLATFORM_WALLET
+        logger.warning("PLATFORM_WALLET_ADDRESS not configured — payment flows will not work. Set it via vault or wallet_config.")
+        return ""
 
     def get_renewal_payment_info(self, provider: str = "") -> dict[str, Any]:
         """Return payment details for a renewal — includes crypto address only when needed.

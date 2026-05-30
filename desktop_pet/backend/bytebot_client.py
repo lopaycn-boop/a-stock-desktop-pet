@@ -25,6 +25,16 @@ _DEFAULT_AGENT_URL = "http://localhost:9991"  # Default; override via BYTEBOT_AG
 _DEFAULT_DESKTOP_URL = "http://localhost:9990"  # Default; override via BYTEBOT_DESKTOP_URL env var
 _BLOCKED_HOSTS = {"169.254.169.254", "metadata.google.internal", "metadata.internal"}
 
+_ALLOWED_PATH_PREFIXES = (
+    "/tmp/bytebot/",
+    "/tmp/xiaotudou/",
+    "/home/bytebot/",
+    "/app/data/",
+    "/data/",
+)
+
+_PATH_RE = __import__("re").compile(r"(\.\./|\.\.\\|~\/|~\\)")
+
 
 def _validate_url(url_str: str) -> str:
     """Validate a Bytebot URL to prevent SSRF."""
@@ -66,6 +76,19 @@ def _get_llm_key():
 
 class BytebotClient:
     """Async client for Bytebot agent + desktop daemon."""
+
+    @staticmethod
+    def _is_safe_path(path: str) -> bool:
+        if not path:
+            return False
+        if _PATH_RE.search(path):
+            return False
+        import os
+        norm = os.path.normpath(path)
+        for prefix in _ALLOWED_PATH_PREFIXES:
+            if norm.startswith(prefix):
+                return True
+        return False
 
     def __init__(self, agent_url=None, desktop_url=None):
         self.agent_url = agent_url
@@ -258,9 +281,13 @@ class BytebotClient:
         return await self.computer_use("application", application=app)
 
     async def read_file(self, path: str) -> dict:
+        if not self._is_safe_path(path):
+            return {"ok": False, "error": f"Access denied: path outside allowed directories: {path}"}
         return await self.computer_use("read_file", path=path)
 
     async def write_file(self, path: str, data: str) -> dict:
+        if not self._is_safe_path(path):
+            return {"ok": False, "error": f"Access denied: path outside allowed directories: {path}"}
         return await self.computer_use("write_file", path=path, data=data)
 
     async def wait(self, duration_ms: int):

@@ -29,6 +29,7 @@ _db: Database | None = None
 _last_cycle: dict[str, Any] = {"status": "idle"}
 _last_intel: dict[str, Any] = {"status": "idle"}
 _lock = threading.Lock()
+_db_lock = threading.Lock()
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
@@ -36,19 +37,29 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 def _get_db() -> Database:
     global _db
     if _db is None:
-        _db = Database(load_settings())
+        with _db_lock:
+            if _db is None:
+                _db = Database(load_settings())
     return _db
 
+
+import hmac as _hmac
 
 def _verify_api_key(x_api_key: str | None = Header(default=None)) -> None:
     expected = load_settings().potato_api_key
     if not expected:
-        raise HTTPException(status_code=401, detail="invalid api key")
-    if x_api_key != expected:
+        raise HTTPException(status_code=401, detail="POTATO_API_KEY not configured — set it before deploying. See .env.example")
+    if not _hmac.compare_digest(x_api_key or "", expected):
         raise HTTPException(status_code=401, detail="invalid api key")
 
 
 def _bootstrap_on_start() -> None:
+    import os as _os
+    if not _os.getenv("POTATO_API_KEY", "").strip():
+        logger.warning(
+            "⚠️  POTATO_API_KEY is not set! All API requests will be rejected. "
+            "Set POTATO_API_KEY in your environment or .env file before deploying."
+        )
     from potato.bootstrap_config import load_bootstrap_settings
 
     bootstrap = load_bootstrap_settings()
@@ -82,7 +93,7 @@ def _bootstrap_on_start() -> None:
                     store.upsert_many(items)
                     logger.info("Secrets seeded: %s", list(items.keys()))
         except Exception as exc:
-            logger.warning("Secret seed failed: %s", exc)
+            logger.error("Secret seed failed: %s", exc, exc_info=True)
 
     _ensure_bot_secrets()
 
@@ -138,7 +149,7 @@ def _ensure_bot_secrets() -> None:
                             "🥔 小土豆 Telegram 已连接！之后每轮交易循环会推送摘要。",
                         )
         except Exception as store_exc:
-            logger.info("DB-backed secrets unavailable, using env fallback: %s", store_exc)
+            logger.warning("DB-backed secrets unavailable, using env fallback: %s", store_exc, exc_info=True)
 
         from potato.telegram_bot import start_telegram_runner
 
@@ -146,7 +157,7 @@ def _ensure_bot_secrets() -> None:
             tg_start = start_telegram_runner()
             logger.info("Telegram runner started: %s", tg_start)
     except Exception as exc:
-        logger.warning("Bot bootstrap skipped: %s", exc)
+        logger.error("Bot bootstrap failed: %s", exc, exc_info=True)
 
 
 def _run_cycle_job() -> None:
@@ -241,6 +252,17 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
 class CycleResponse(BaseModel):
     ok: bool
     result: dict[str, Any]
@@ -271,6 +293,31 @@ class ActivateBotsRequest(BaseModel):
 class SecretUpsertRequest(BaseModel):
     key: str
     value: str
+
+
+class StockSentimentRequest(BaseModel):
+    text: str = ""
+
+
+class IwencaiQueryRequest(BaseModel):
+    question: str = ""
+    page: int = 1
+    limit: int = 10
+
+
+class IwencaiSearchRequest(BaseModel):
+    keyword: str = ""
+    channel: str = "news"
+    limit: int = 10
+
+
+class IwencaiSelectRequest(BaseModel):
+    query: str = ""
+    limit: int = 20
+
+
+class IwencaiFormatRequest(BaseModel):
+    question: str = ""
 
 
 class CredentialGrantRequest(BaseModel):
@@ -528,11 +575,14 @@ def telegram_diag(_: None = Depends(_verify_api_key)) -> dict[str, Any]:
     wh = {}
     if is_live_secret(settings.telegram_bot_token):
         import httpx
+        from potato.notifications import mask_secret
 
+        masked_token = mask_secret(settings.telegram_bot_token)
         wh = httpx.get(
             f"https://api.telegram.org/bot{settings.telegram_bot_token}/getWebhookInfo",
             timeout=20.0,
         ).json()
+        wh.pop("result", {}).get("url", "")
 
     updates = {"ok": False}
     if is_live_secret(settings.telegram_bot_token):
@@ -580,8 +630,6 @@ def secrets_upsert(body: SecretUpsertRequest, _: None = Depends(_verify_api_key)
         raise HTTPException(status_code=400, detail=f"Unknown key: {key}")
     value = body.value.strip()
     upsert_bot_secret(key, value)
-    import os
-    os.environ[key] = value
     return {"ok": True, "key": key}
 
 
@@ -642,6 +690,149 @@ def credential_schemas(_: None = Depends(_verify_api_key)) -> dict[str, Any]:
     from potato.credentials import CredentialsPlugin
 
     return {"ok": True, "platforms": CredentialsPlugin.all_field_schemas()}
+
+
+# === Stock Data APIs ===
+from potato.eastmoney import (
+    get_realtime_quote, get_stock_changes, get_kline_data,
+    get_hot_tables, get_chip_distribution, analyze_sentiment,
+)
+from potato.iwencai import IwencaiClient, format_iwencai_to_text
+
+
+import re
+
+_STOCK_CODE_RE = re.compile(r"^[0-9]{6}$")
+
+
+def _validate_stock_code(code: str) -> str:
+    if not _STOCK_CODE_RE.match(code):
+        raise HTTPException(status_code=400, detail="Invalid stock code: must be 6 digits")
+    return code
+
+
+@app.get("/api/stock/quote/{code}")
+@limiter.limit("30/minute")
+def stock_quote(request: Request, code: str, _auth: None = Depends(_verify_api_key)) -> dict[str, Any]:
+    return get_realtime_quote(_validate_stock_code(code))
+
+
+@app.get("/api/stock/changes")
+@limiter.limit("30/minute")
+def stock_changes(request: Request, _auth: None = Depends(_verify_api_key)) -> list[dict]:
+    return get_stock_changes()
+
+
+@app.get("/api/stock/kline/{code}")
+@limiter.limit("20/minute")
+def stock_kline(request: Request, code: str, period: str = "101", start: str = "20250101", end: str = "20251231", _auth: None = Depends(_verify_api_key)) -> list[str]:
+    return get_kline_data(_validate_stock_code(code), period, start, end)
+
+
+@app.get("/api/stock/hot_tables")
+@limiter.limit("20/minute")
+def stock_hot_tables(request: Request, market: int = 1, _auth: None = Depends(_verify_api_key)) -> list[dict]:
+    return get_hot_tables(market)
+
+
+@app.get("/api/stock/chip/{code}")
+@limiter.limit("20/minute")
+def stock_chip(request: Request, code: str, _auth: None = Depends(_verify_api_key)) -> dict[str, Any]:
+    return get_chip_distribution(_validate_stock_code(code))
+
+
+@app.post("/api/stock/sentiment")
+@limiter.limit("15/minute")
+def stock_sentiment(request: Request, body: StockSentimentRequest, _auth: None = Depends(_verify_api_key)) -> dict[str, Any]:
+    return analyze_sentiment(body.text)
+
+
+@app.post("/api/iwencai/query")
+@limiter.limit("10/minute")
+def iwencai_query(request: Request, body: IwencaiQueryRequest, _auth: None = Depends(_verify_api_key)) -> dict[str, Any]:
+    client = IwencaiClient()
+    return client.query(body.question, body.page, body.limit)
+
+
+@app.post("/api/iwencai/search")
+@limiter.limit("10/minute")
+def iwencai_search(request: Request, body: IwencaiSearchRequest, _auth: None = Depends(_verify_api_key)) -> dict[str, Any]:
+    client = IwencaiClient()
+    return client.search(body.keyword, body.channel, body.limit)
+
+
+@app.post("/api/iwencai/select")
+@limiter.limit("10/minute")
+def iwencai_select(request: Request, body: IwencaiSelectRequest, _auth: None = Depends(_verify_api_key)) -> dict[str, Any]:
+    client = IwencaiClient()
+    return client.select_stocks(body.query, body.limit)
+
+
+@app.post("/api/iwencai/format")
+@limiter.limit("10/minute")
+def iwencai_format(request: Request, body: IwencaiFormatRequest, _auth: None = Depends(_verify_api_key)) -> dict[str, Any]:
+    client = IwencaiClient()
+    result = client.query(body.question)
+    return {"ok": True, "text": format_iwencai_to_text(result)}
+
+
+@app.post("/api/stock/sentiment_full")
+@limiter.limit("10/minute")
+def stock_sentiment_full(request: Request, body: StockSentimentRequest, _auth: None = Depends(_verify_api_key)) -> dict[str, Any]:
+    return {"ok": True, "data": analyze_sentiment(body.text)}
+
+
+# === Plugin System APIs ===
+from potato.plugins import call_plugin, list_plugins as _list_plugins
+
+
+@app.get("/api/plugins")
+def plugins_list() -> dict[str, Any]:
+    plugins = _list_plugins()
+    return {
+        "ok": True,
+        "plugins": [
+            {"name": p.name, "display_name": p.display_name, "description": p.description,
+             "version": p.version, "actions": p.actions, "available": p.available}
+            for p in plugins
+        ],
+    }
+
+
+@app.post("/api/plugins/{name}/{action}")
+def plugin_call(name: str, action: str, body: dict[str, Any] = None) -> dict[str, Any]:
+    import asyncio
+    result = call_plugin(name, action, body or {})
+    if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+        result = asyncio.get_event_loop().run_until_complete(result) if not asyncio.get_event_loop().is_running() else {"ok": False, "error": "async not supported in sync endpoint"}
+    return result
+
+
+@app.post("/api/plugin/analyze")
+def plugin_analyze(body: dict[str, Any]) -> dict[str, Any]:
+    import asyncio
+    result = call_plugin("ais", "analyze", body or {})
+    if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+        result = {"ok": False, "error": "async not supported"}
+    return result
+
+
+@app.post("/api/plugin/learn")
+def plugin_learn(body: dict[str, Any]) -> dict[str, Any]:
+    import asyncio
+    result = call_plugin("ais", "learn", body or {})
+    if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+        result = {"ok": False, "error": "async not supported"}
+    return result
+
+
+@app.post("/api/plugin/audit")
+def plugin_audit(body: dict[str, Any]) -> dict[str, Any]:
+    import asyncio
+    result = call_plugin("deepaudit", "audit_snippet", body or {})
+    if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+        result = {"ok": False, "error": "async not supported"}
+    return result
 
 
 if __name__ == "__main__":

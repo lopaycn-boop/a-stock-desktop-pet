@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -17,6 +18,15 @@ logger = logging.getLogger("potato.browser")
 from potato.paths import DATA_DIR as _ROOT_DATA_DIR
 
 browser_profiles_dir = _ROOT_DATA_DIR / "browser_profiles"
+
+_SAFE_JS_PATTERNS = [
+    re.compile(r"^document\.\s*(querySelector|getElementById|getElementsByClassName|getElementsByName)\s*\(", re.DOTALL),
+    re.compile(r"^\s*return\s+", re.DOTALL),
+    re.compile(r"^window\.\s*(location|scrollTo|scrollBy)\b", re.DOTALL),
+    re.compile(r"^\s*\{?\s*['\"]?ok['\"]?\s*[:=]\s*(true|false)\s*\}?\s*;?\s*$", re.DOTALL),
+]
+
+_MAX_JS_LENGTH = 512
 
 try:
     from playwright.async_api import Browser, BrowserContext, Page, async_playwright
@@ -178,8 +188,16 @@ class BrowserEngine:
         return await page.inner_text("body")
 
     async def evaluate_js(self, platform_id: str, script: str) -> Any:
-        """Run JavaScript in the platform page context."""
+        """Run JavaScript in the platform page context — sandboxed."""
+        if not script or len(script) > _MAX_JS_LENGTH:
+            logger.warning("evaluate_js blocked: script too long (%d chars, max %d)", len(script), _MAX_JS_LENGTH)
+            return None
         page = self._pages.get(platform_id)
         if not page or page.is_closed():
             return None
-        return await page.evaluate(script)
+        cleaned = script.strip()
+        for pat in _SAFE_JS_PATTERNS:
+            if pat.match(cleaned):
+                return await page.evaluate(script)
+        logger.warning("evaluate_js blocked: script does not match any safe pattern: %s", cleaned[:80])
+        return None

@@ -305,15 +305,25 @@ class Database:
             conn.commit()
         return order_id
 
+    _UPDATE_FIELD_MAP = {
+        "status": "status",
+        "clob_order_id": "clob_order_id",
+        "error_message": "error_message",
+        "updated_at": "updated_at",
+    }
+
     def update_order(self, client_order_id: str, **fields: Any) -> None:
-        allowed = {"status", "clob_order_id", "error_message", "updated_at"}
-        updates = {k: v for k, v in fields.items() if k in allowed}
+        updates = {}
+        for k, v in fields.items():
+            col = self._UPDATE_FIELD_MAP.get(k)
+            if col is not None:
+                updates[col] = v
         if not updates:
             return
         updates["updated_at"] = datetime.now(timezone.utc)
         if self._use_sqlite:
             updates["updated_at"] = updates["updated_at"].isoformat()
-        sets = ", ".join(f"{k} = %s" for k in updates)
+        sets = ", ".join(f"{col} = %s" for col in updates)
         with self.connect() as conn:
             cur = conn.cursor()
             cur.execute(

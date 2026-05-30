@@ -93,8 +93,11 @@ def _get_vault_key() -> bytes:
     if env_key:
         salt_val = os.environ.get("VAULT_SALT", "").strip()
         if not salt_val:
-            logger.warning("VAULT_ENCRYPTION_KEY set but VAULT_SALT not set — using insecure default salt. Set VAULT_SALT for production.")
-            salt_val = "vault-stable-salt-CHANGE-ME-IN-PRODUCTION"
+            raise RuntimeError(
+                "VAULT_ENCRYPTION_KEY is set but VAULT_SALT is not. "
+                "Refusing to use insecure default salt. "
+                "Set VAULT_SALT environment variable before starting."
+            )
         return hashlib.pbkdf2_hmac("sha256", env_key.encode(), salt_val.encode(), 200_000)
 
     from potato.paths import DATA_DIR as _DATA_DIR

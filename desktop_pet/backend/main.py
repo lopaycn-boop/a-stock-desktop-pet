@@ -16,6 +16,7 @@ Core capability:
 
 import asyncio
 import hashlib
+import hmac as _hmac
 import json
 import logging
 import os
@@ -92,6 +93,15 @@ def _get_broker():
     return _broker_instance
 
 _WS_TOKEN = os.getenv("PET_WS_TOKEN", "")  # Set PET_WS_TOKEN env var for production!
+
+
+def _ensure_ws_token():
+    global _WS_TOKEN
+    if not _WS_TOKEN:
+        import secrets as _secrets
+        _WS_TOKEN = _secrets.token_urlsafe(32)
+        os.environ["PET_WS_TOKEN"] = _WS_TOKEN
+        logger.info("Generated random PET_WS_TOKEN for this session (set env var to persist across restarts)")
 _RATE_LIMIT_WINDOW = 5.0
 _RATE_LIMIT_MAX = 30
 _rate_bucket: dict[str, list[float]] = defaultdict(list)
@@ -143,6 +153,7 @@ async def lifespan(app: FastAPI):
         logger.info(line)
 
     logger.info("Pet backend starting (pid=%s)", os.getpid())
+    _ensure_ws_token()
     db_result = await asyncio.to_thread(init_db)
     logger.info("Database init result: %s", db_result)
 
@@ -654,7 +665,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     if _WS_TOKEN:
         token = websocket.query_params.get("token", "")
-        if token != _WS_TOKEN:
+        if not _hmac.compare_digest(token or "", _WS_TOKEN):
             await websocket.close(code=4003, reason="Unauthorized")
             logger.warning("WS auth failed from %s", client_host)
             return
@@ -3015,6 +3026,19 @@ async def handle_broker_status(send_func):
 
 async def handle_broker_switch(payload: dict, send_func):
     global _broker_instance, _trading_scheduler
+
+    target_mode = str(payload.get("mode", "dry_run")).lower()
+    if target_mode == "live":
+        confirmation = str(payload.get("confirm", "")).strip().lower()
+        if confirmation not in ("confirm", "yes", "确认", "确认切换", "切换实盘"):
+            await send_func("broker_switch", {
+                "ok": False,
+                "mode": "dry_run",
+                "is_live": False,
+                "message": "⚠️ 实盘模式必须通过API端点显式确认。请使用 /api/broker/switch 端点并传入 confirm=true 参数。",
+            })
+            return
+
     try:
         broker = _get_broker()
         target_mode = str(payload.get("mode", "dry_run")).lower()

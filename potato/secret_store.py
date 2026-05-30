@@ -8,8 +8,9 @@ Security: All secrets are Fernet(AES-128-CBC+HMAC-SHA256) encrypted at rest.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Any, Iterator
 
 from potato.bootstrap_config import BootstrapSettings, load_bootstrap_settings
@@ -17,10 +18,12 @@ from potato.bootstrap_config import BootstrapSettings, load_bootstrap_settings
 try:
     import psycopg2 as _psycopg2
     import psycopg2.extras as _psycopg2_extras
+    from psycopg2 import pool as _psycopg2_pool
     _HAS_PSYCOPG2 = True
 except ImportError:
     _psycopg2 = None
     _psycopg2_extras = None
+    _psycopg2_pool = None
     _HAS_PSYCOPG2 = False
 
 from potato.vault import _encrypt, _decrypt
@@ -69,6 +72,9 @@ class SecretStore:
     All values are Fernet(AES-128-CBC+HMAC-SHA256) encrypted before storage and decrypted on read.
     """
 
+    _pool = None
+    _pool_lock = Lock()
+
     def __init__(self, bootstrap: BootstrapSettings | None = None):
         self.bootstrap = bootstrap or load_bootstrap_settings()
         if not self.bootstrap.crdb_dsn:
@@ -76,13 +82,22 @@ class SecretStore:
         if not _HAS_PSYCOPG2:
             raise ImportError("psycopg2 is required for CockroachDB connection. Install psycopg2-binary or use SQLite fallback.")
 
+    @classmethod
+    def _get_pool(cls, dsn: str):
+        if cls._pool is None:
+            with cls._pool_lock:
+                if cls._pool is None:
+                    cls._pool = _psycopg2_pool.SimpleConnectionPool(1, 5, dsn=dsn)
+        return cls._pool
+
     @contextmanager
     def connect(self) -> Iterator[Any]:
-        conn = _psycopg2.connect(self.bootstrap.crdb_dsn)
+        pool = self._get_pool(self.bootstrap.crdb_dsn)
+        conn = pool.getconn()
         try:
             yield conn
         finally:
-            conn.close()
+            pool.putconn(conn)
 
     def ensure_schema(self) -> None:
         with self.connect() as conn:
@@ -146,8 +161,9 @@ class SecretStore:
             key = str(r["key"])
             try:
                 result[key] = _decrypt(str(r["value"]))
-            except Exception:
-                result[key] = str(r["value"])
+            except Exception as exc:
+                logger.error("Secret decryption failed for key %s: %s — skipping (not returning plaintext)", key, exc)
+                continue
         return result
 
     def list_keys(self) -> list[str]:
@@ -237,7 +253,7 @@ def _load_vault_secrets() -> dict[str, str]:
         try:
             result[key] = _decrypt(value)
         except Exception:
-            result[key] = value
+            pass
     return result
 
 
