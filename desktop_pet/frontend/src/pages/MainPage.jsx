@@ -6,6 +6,8 @@ import BillingPanel from '../components/BillingPanel';
 import RenewalPanel from '../components/RenewalPanel';
 import DataPanel from '../components/DataPanel';
 import SettingsPanel from '../components/SettingsPanel';
+import TradeHistoryPanel from '../components/TradeHistoryPanel';
+import OnboardingWizard from '../components/OnboardingWizard';
 import '../App.css';
 
 import { useAudioQueue } from '../hooks/useAudioQueue';
@@ -14,6 +16,7 @@ import { useClickThrough } from '../hooks/useClickThrough';
 import { useDesktopNotification } from '../hooks/useDesktopNotification';
 import { useWakeWord } from '../hooks/useWakeWord';
 import { playTradeSignal, playRiskAlert, playChatNotification } from '../hooks/useSounds';
+import { inferEmotionFromMessage, emotionToExpression, stateToExpression } from '../hooks/useEmotionEngine';
 import { getSavedModelId, saveModelId } from '../components/Live2D/modelRegistry';
 
 function formatTs(ts) {
@@ -128,6 +131,7 @@ const QUICK_ACTIONS = [
   { label: '🔑 密钥', msg: '__vault__' },
   { label: '📡 数据', msg: '__data_panel__' },
   { label: '🆙 更新', msg: '__check_updates__' },
+  { label: '📊 记录', msg: '__trade_history__' },
   { label: '⚙️ 设置', msg: '__settings__' },
 ];
 
@@ -148,6 +152,10 @@ export default function MainPage() {
   const [showRenewalPanel, setShowRenewalPanel] = useState(false);
   const [showDataPanel, setShowDataPanel] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showTradeHistory, setShowTradeHistory] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    try { return !localStorage.getItem('potato_onboarding_done'); } catch(e) { return false; }
+  });
   const [alwaysOnTop, setAlwaysOnTop] = useState(true);
   const [systemStatus, setSystemStatus] = useState(null);
   const messagesEndRef = useRef(null);
@@ -170,6 +178,12 @@ export default function MainPage() {
   const handleServerPacket = useCallback((packet) => {
     const { type, payload } = packet;
     notify(packet);
+    // Live2D emotion trigger
+    const emotion = inferEmotionFromMessage({ type, content: payload?.text || payload?.message || payload?.info || '' });
+    if (emotion && live2dRef.current) {
+      const expr = emotionToExpression(emotion, currentModel);
+      if (expr) { live2dRef.current.showExpression(expr, true); setTimeout(() => live2dRef.current?.resetExpression?.(), 4000); }
+    }
     switch (type) {
       case 'state_update':
         setNeuroState(payload.state);
@@ -1072,6 +1086,10 @@ case 'billing_renewal_payment': {
       setShowSettings(true);
       return;
     }
+    if (action.msg === '__trade_history__') {
+      setShowTradeHistory(true);
+      return;
+    }
     setChatOpen(true);
     setMessages(prev => [...prev, { type: 'user', content: action.msg }]);
     sendPacket({ type: "text_input", payload: { text: action.msg } });
@@ -1091,6 +1109,17 @@ case 'billing_renewal_payment': {
 
   const stateLabel = recording ? '🎤 录音中' : neuroState === 'thinking' ? '思考中...' : neuroState === 'speaking' ? '说话中' : '待命';
   const stateColor = recording ? '#ff8a80' : neuroState === 'thinking' ? '#64b5f6' : neuroState === 'speaking' ? '#ffb74d' : '#69f0ae';
+
+  // Live2D expression from neuroState
+  useEffect(() => {
+    if (!live2dRef.current) return;
+    const expr = stateToExpression(neuroState, currentModel);
+    if (expr) {
+      live2dRef.current.showExpression(expr, true);
+    } else if (neuroState === 'idle') {
+      live2dRef.current.resetExpression?.();
+    }
+  }, [neuroState, currentModel]);
 
   return (
     <div className="app">
@@ -1312,6 +1341,19 @@ case 'billing_renewal_payment': {
         />
       )}
 
+      {showTradeHistory && (
+        <TradeHistoryPanel
+          onClose={() => setShowTradeHistory(false)}
+          sendPacket={sendPacket}
+          messages={messages}
+        />
+      )}
+          }}
+          messages={messages}
+          sendPacket={sendPacket}
+        />
+      )}
+
       {/* Keyboard shortcuts */}
       <KeyboardShortcuts
         chatOpen={chatOpen}
@@ -1322,6 +1364,13 @@ case 'billing_renewal_payment': {
         quickActions={QUICK_ACTIONS}
         handleQuickAction={handleQuickAction}
       />
+
+      {showOnboarding && (
+        <OnboardingWizard
+          onComplete={() => setShowOnboarding(false)}
+          sendPacket={sendPacket}
+        />
+      )}
     </div>
   );
 }

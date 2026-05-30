@@ -2,6 +2,25 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.6.0] - 2025-05-30
+
+### New Features
+- **Live2D Emotion Engine**: Pet now reacts with expressions — happy on trade success, sad on blocked, thinking when AI processes, surprised on alerts
+- **Trade History Panel** (`📊 记录`): View recent trades, trigger daily review, load full history
+- **Onboarding Wizard**: First-time user walkthrough — 5 steps explaining API keys, chat, trading, risk control, settings
+- `useEmotionEngine.js` maps message content → emotion → model-specific expression with 4s auto-reset
+
+### UX
+- Quick action bar: added `📊 记录` button for trade history
+- Live2D reacts to neuroState changes (thinking=思索表情, speaking=neutral, recording=surprised)
+- Settings version label updated to v1.6.0
+
+### Technical
+- `inferEmotionFromMessage()` extracts emotion from trade emojis and system messages
+- `emotionToExpression()` / `stateToExpression()` bridge emotions to model expression IDs
+- 204 tests passing
+- 42 features total
+
 ## [1.5.0] - 2025-05-30
 
 ### New Features
