@@ -38,6 +38,8 @@ import useTooltip from '../hooks/useTooltip.jsx';
 import StockChart from '../components/StockChart';
 import PortfolioDashboard from '../components/PortfolioDashboard';
 import StrategyEditor from '../components/StrategyEditor';
+import ModelSwitcherPanel from '../components/ModelSwitcherPanel';
+import useTypingEffect from '../hooks/useTypingEffect';
 
 function formatTs(ts) {
   if (!ts) return '';
@@ -171,6 +173,7 @@ export default function MainPage() {
   const { theme, effectiveTheme, cycleTheme } = useTheme();
   const { width: chatWidth, resizeHandleProps, isDragging } = useChatResize(380);
   const { show: showTooltip, hide: hideTooltip, TooltipOverlay } = useTooltip();
+  const { displayedText: typingText, isTyping: isAiTyping, startTyping, skipToEnd: skipTyping } = useTypingEffect();
   const [showChatSearch, setShowChatSearch] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
@@ -244,7 +247,9 @@ export default function MainPage() {
         setChatOpen(true);
         break;
       case 'chat':
-        setMessages(prev => [...prev, { type: 'assistant', content: maskSecrets(payload.text || payload.reply || '') }]);
+        const chatText = maskSecrets(payload.text || payload.reply || '');
+        setMessages(prev => [...prev, { type: 'assistant', content: chatText }]);
+        if (chatText.length > 50) startTyping(chatText, 8);
         setNeuroState('idle');
         break;
       case 'canceled':
@@ -1339,6 +1344,7 @@ case 'billing_renewal_payment': {
             >
               {wakeListening ? '🔊唤醒' : '🔇唤醒'}
             </button>
+            <ModelSwitcherPanel currentModel={currentModel} onSwitch={(id) => { setCurrentModel(id); saveModelId(id); showToast(`模型已切换`, 'success'); }} connected={connected} lang={isZh ? 'zh' : 'en'} />
           </div>
           <button className="close-btn" onClick={() => setChatOpen(false)}>✕</button>
             <button onClick={clearMessages} title="清空聊天记录" style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, cursor: 'pointer', padding: '0 4px', marginLeft: 4 }}>🗑️</button>

@@ -2,6 +2,19 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.15.0] - 2025-05-30
+
+### New Features
+- **Model Switcher Panel**: One-click model switch between DeepSeek/Liner/SiliconFlow/Base44/OpenAI with tier indicators
+- **Typing Effect**: AI responses stream character-by-character for messages >50 chars (8ms/char)
+- **Tray Menu Enhancement**: Full action menu (market/analysis/portfolio/pick/review/balance/settings/update)
+- **72 total features registered**
+
+### UX
+- Model switcher shows colored status dot, tier badges (T1-T4), active indicator
+- Typing effect can be skipped by clicking the message
+- Dashboard quick action (📋) opens 3-tab overlay
+
 ## [1.14.0] - 2025-05-30
 
 ### New Features
