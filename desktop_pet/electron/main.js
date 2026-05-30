@@ -56,20 +56,31 @@ function waitForBackend(port, maxRetries = 30) {
   return new Promise((resolve) => {
     let tries = 0;
     const check = () => {
-      const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
-        if (res.statusCode === 200) {
-          resolve(true);
-        } else {
-          tries++;
-          if (tries < maxRetries) setTimeout(check, 1000);
-          else resolve(false);
-        }
+      const req = http.get(`http://127.0.0.1:${port}/version`, (res) => {
+        let body = '';
+        res.on('data', (d) => body += d);
+        res.on('end', () => {
+          try {
+            const data = JSON.parse(body);
+            if (data.version && data.features) {
+              console.log(`[electron] Potato backend confirmed on port ${port} v${data.version}`);
+              resolve(true);
+            } else {
+              console.log(`[electron] Port ${port} responding but not potato backend, skipping`);
+              resolve(false);
+            }
+          } catch {
+            console.log(`[electron] Port ${port} response not JSON, skipping`);
+            resolve(false);
+          }
+        });
       });
       req.on('error', () => {
         tries++;
         if (tries < maxRetries) setTimeout(check, 1000);
         else resolve(false);
       });
+      req.setTimeout(3000, () => { req.destroy(); tries++; if (tries < maxRetries) setTimeout(check, 1000); else resolve(false); });
       req.end();
     };
     check();
@@ -632,19 +643,17 @@ app.whenReady().then(async () => {
 
   // Wait for backend to be ready and find its actual port
   let actualPort = BACKEND_PORT;
-  const backendReady = await waitForBackend(BACKEND_PORT, 30);
-  if (!backendReady) {
-    // Try alternate ports
-    for (let altPort = 8001; altPort < 8010; altPort++) {
-      const altReady = await waitForBackend(altPort, 3);
-      if (altReady) {
-        actualPort = altPort;
-        console.log(`[electron] Backend found on alternate port ${altPort}`);
-        break;
-      }
+  // Scan all ports 8000-8009 to find the potato backend
+  for (let tryPort = 8000; tryPort < 8010; tryPort++) {
+    const ready = await waitForBackend(tryPort, tryPort === BACKEND_PORT ? 30 : 2);
+    if (ready) {
+      actualPort = tryPort;
+      BACKEND_PORT = tryPort;
+      console.log(`[electron] Potato backend found on port ${tryPort}`);
+      break;
     }
   }
-  if (!backendReady && actualPort === BACKEND_PORT) {
+  if (actualPort === 8000 && !(await waitForBackend(8000, 1))) {
     console.error('Backend failed to start within 30s');
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('system-event', { type: 'backend_timeout' });

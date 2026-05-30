@@ -2,6 +2,13 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.20.1] - 2025-05-30
+
+### Bug Fix
+- **Port Conflicts**: Backend discovery now validates `/version` endpoint (potato-specific) instead of `/health`, preventing false positives when SurrealDB or other services occupy port 8000/8001
+- **Port Scanning**: Electron now scans 8000-8009 to find the actual potato backend instead of assuming default port
+- **Source Protection**: JS obfuscation + Python .pyc compilation (from v1.20.0)
+
 ## [1.20.0] - 2025-05-30
 
 ### Source Code Protection (Production Build)
