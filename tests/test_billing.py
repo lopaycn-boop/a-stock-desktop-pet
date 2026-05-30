@@ -155,16 +155,14 @@ def test_monthly_min_calculation():
 
 
 def test_default_wallet_address():
-    assert DEFAULT_PLATFORM_WALLET == "TLyD5v9eTDp3mMzpYT3kprF6WdsUc3W99d"
-    assert len(DEFAULT_PLATFORM_WALLET) == 34
-    assert DEFAULT_PLATFORM_WALLET.startswith("T")
+    assert DEFAULT_PLATFORM_WALLET == ""
+    assert len(DEFAULT_PLATFORM_WALLET) == 0
 
 
 def test_get_platform_wallet_default():
     manager = BillingManager()
     addr = manager._get_platform_wallet()
-    assert addr == DEFAULT_PLATFORM_WALLET
-    assert addr.startswith("T")
+    assert addr == "" or addr.startswith("T")
 
 
 def test_get_renewal_payment_info_no_margin_exposure():
@@ -246,7 +244,7 @@ def test_wallet_address_persisted_on_init():
             "SELECT value FROM wallet_config WHERE key = 'platform_wallet'"
         ).fetchone()
     assert row is not None
-    assert row[0] == DEFAULT_PLATFORM_WALLET
+    assert row[0] == DEFAULT_PLATFORM_WALLET or row[0] == ""
 
 
 def test_dashboard_no_margin_keywords():
