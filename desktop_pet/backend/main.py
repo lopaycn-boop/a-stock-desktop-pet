@@ -3320,6 +3320,7 @@ def _find_available_port(start=8000, max_tries=10):
 
 if __name__ == "__main__":
     import socket
+    import uvicorn
     preferred_port = int(os.getenv("PORT", "8000"))
     port = _find_available_port(preferred_port)
     if port != preferred_port:
