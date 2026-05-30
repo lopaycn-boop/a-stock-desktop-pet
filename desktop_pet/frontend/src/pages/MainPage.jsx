@@ -26,6 +26,8 @@ import ToastContainer, { showToast } from '../components/ToastContainer';
 import QuickReplyChips from '../components/QuickReplyChips';
 import MessageActions from '../components/MessageActions';
 import ChatSearch from '../components/ChatSearch';
+import CommandPalette from '../components/CommandPalette';
+import ChatMessage from '../components/ChatMessage';
 import useI18n from '../hooks/useI18n';
 import useTheme from '../hooks/useTheme';
 import useChatResize from '../hooks/useChatResize';
@@ -155,6 +157,10 @@ export default function MainPage() {
   const [neuroState, setNeuroState] = useState("idle");
   const [inputText, setInputText] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
+  const [pinnedMessages, setPinnedMessages] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('potato_pinned') || '[]'); } catch { return []; }
+  });
+  const [showPinned, setShowPinned] = useState(false);
   const [actionSteps, setActionSteps] = useState([]);
   const [vaultReady, setVaultReady] = useState(null);
   const [recording, setRecording] = useState(false);
@@ -1086,6 +1092,33 @@ case 'billing_renewal_payment': {
     }, 100);
   }, []);
 
+  const togglePin = useCallback((msg) => {
+    setPinnedMessages(prev => {
+      const exists = prev.find(p => p.ts === msg.ts);
+      const next = exists ? prev.filter(p => p.ts !== msg.ts) : [...prev, { ts: msg.ts, content: msg.content, type: msg.type }];
+      try { localStorage.setItem('potato_pinned', JSON.stringify(next)); } catch {}
+      showToast(exists ? '已取消置顶' : '📌 已置顶', 'info', 1500);
+      return next;
+    });
+  }, []);
+
+  const handleExportChat = useCallback(() => {
+    const text = messages.map(m => `[${formatTs(m.ts)}] ${m.type}: ${typeof m.content === 'string' ? m.content : ''}`).join('\n');
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `potato-chat-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click(); URL.revokeObjectURL(url);
+    showToast('聊天已导出', 'success');
+  }, [messages]);
+
+  const handleCommandAction = useCallback((action) => {
+    if (action === 'export') { handleExportChat(); }
+    else if (action === 'clear') { clearMessages(); showToast('聊天已清空', 'info'); }
+    else if (action === 'theme') { cycleTheme(); }
+    else if (action === 'lang') { switchLang(isZh ? 'en' : 'zh'); }
+  }, [clearMessages, cycleTheme, switchLang, isZh]);
+
   const handleQuickAction = (action) => {
     if (action.msg === '__vault__') {
       sendPacket({ type: 'vault_status', payload: {} });
@@ -1205,6 +1238,11 @@ case 'billing_renewal_payment': {
       fallbackMessage={t('error_boundary.message')}
     >
     <ToastContainer />
+    <CommandPalette
+      onSend={(msg) => { sendPacket({ type: 'text_input', payload: { text: msg } }); setChatOpen(true); }}
+      onAction={handleCommandAction}
+      lang={isZh ? 'zh' : 'en'}
+    />
     <div className="app">
       {/* 桌宠：全屏 */}
       <div className="pet-layer">
@@ -1292,6 +1330,19 @@ case 'billing_renewal_payment': {
               <button onClick={() => window.location.reload()} style={{ background: 'rgba(255,82,82,0.2)', border: '1px solid rgba(255,82,82,0.4)', borderRadius: 6, color: '#ff8a80', padding: '2px 10px', cursor: 'pointer', fontSize: 11 }}>🔄 刷新</button>
             </div>
           )}
+          {pinnedMessages.length > 0 && (
+            <div style={{ background: 'var(--msg-success)', borderRadius: 8, padding: '6px 10px', marginBottom: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11, color: 'var(--accent)', marginBottom: 2, cursor: 'pointer' }} onClick={() => setShowPinned(s => !s)}>
+                📌 置顶消息 ({pinnedMessages.length}) {showPinned ? '▲' : '▼'}
+              </div>
+              {showPinned && pinnedMessages.map(p => (
+                <div key={p.ts} style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '2px 0', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{typeof p.content === 'string' ? p.content.slice(0, 60) : ''}</span>
+                  <button onClick={() => togglePin(p)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 10, marginLeft: 6 }}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
           {neuroState === 'thinking' && chatOpen && (
             <div className="chat-msg assistant" style={{ opacity: 0.7 }}>
               <div style={{ fontSize: 13, color: '#64b5f6' }}>
@@ -1363,7 +1414,7 @@ case 'billing_renewal_payment': {
                   ))}
                 </div>
 )}
-              <MessageActions message={msg} onRetry={handleRetryMessage} onDelete={handleDeleteMessage} lang={isZh ? 'zh' : 'en'} />
+              <MessageActions message={msg} onRetry={handleRetryMessage} onDelete={handleDeleteMessage} onPin={togglePin} isPinned={pinnedMessages.some(p => p.ts === msg.ts)} lang={isZh ? 'zh' : 'en'} />
             </div>
             );
           })}

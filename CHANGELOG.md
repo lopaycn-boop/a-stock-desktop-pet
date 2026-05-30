@@ -2,6 +2,20 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.12.0] - 2025-05-30
+
+### New Features
+- **Command Palette** (⌘K / Ctrl+K): Quick command launcher with search — market, analyze, positions, settings, theme, lang, export, clear, etc.
+- **Message Pinning** (📌): Pin important messages to top of chat for quick reference, persisted in localStorage
+- **Performance**: ChatMessage wrapped in React.memo for render optimization
+- **Accessibility**: ARIA roles/labels on key elements, focus-visible outlines, screen-reader-only class
+- **61 total features registered**
+
+### UX
+- Ctrl+K opens command palette with fuzzy search — instant access to all actions
+- Pinned messages show as collapsible section at top of chat
+- Focus states use accent color outlines
+
 ## [1.11.0] - 2025-05-30
 
 ### New Features

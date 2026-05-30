@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 
-export default function MessageActions({ message, onCopy, onRetry, onDelete, lang = 'zh' }) {
+export default function MessageActions({ message, onCopy, onRetry, onDelete, onPin, isPinned, lang = 'zh' }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
@@ -48,6 +48,14 @@ export default function MessageActions({ message, onCopy, onRetry, onDelete, lan
       }}>
         ✕
       </button>
+      {onPin && (
+        <button onClick={() => onPin(message)} title={isPinned ? (lang === 'zh' ? '取消置顶' : 'Unpin') : (lang === 'zh' ? '置顶' : 'Pin')} style={{
+          background: 'none', border: 'none', color: isPinned ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer',
+          fontSize: 11, padding: '2px 4px', borderRadius: 4,
+        }}>
+          📌
+        </button>
+      )}
     </div>
   );
 }
