@@ -733,6 +733,30 @@ case 'billing_renewal_payment': {
         setMessages(prev => [...prev, { type: 'system', content: `📰 搜索结果: ${searchCount}条${searchCount > 0 ? '资讯' : ''}` }]);
         break;
       }
+      case 'trendradar_trending': {
+        const items = payload?.items || [];
+        const tCount = payload?.count || items.length;
+        const tPlatforms = payload?.platforms ? Object.values(payload.platforms).slice(0, 3).join('、') : '';
+        setMessages(prev => [...prev, { type: 'system', content: `🔥 热点监控: ${tPlatforms}等${tCount}条热点` }]);
+        if (window._trHandler) { window._trHandler({ type: 'trendradar_trending', payload }); }
+        break;
+      }
+      case 'trendradar_search': {
+        const sItems = payload?.items || [];
+        const sCount = payload?.count || sItems.length;
+        const sKw = payload?.keyword || '';
+        setMessages(prev => [...prev, { type: 'system', content: `🔍 热点搜索「${sKw}」: ${sCount}条结果` }]);
+        if (window._trHandler) { window._trHandler({ type: 'trendradar_search', payload }); }
+        break;
+      }
+      case 'trendradar_sentiment': {
+        const totalTopics = payload?.total_topics || 0;
+        const financeCount = payload?.total_finance_related || 0;
+        const financeRatio = payload?.finance_ratio || 0;
+        setMessages(prev => [...prev, { type: 'system', content: `📊 舆情分析: ${totalTopics}条热点, 金融相关${financeCount}条(${financeRatio}%)` }]);
+        if (window._trHandler) { window._trHandler({ type: 'trendradar_sentiment', payload }); }
+        break;
+      }
       default:
         break;
     }

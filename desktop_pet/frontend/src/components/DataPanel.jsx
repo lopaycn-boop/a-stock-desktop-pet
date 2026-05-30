@@ -5,8 +5,20 @@ const DATA_SOURCES = [
   { id: 'deepseek', label: 'DeepSeek LLM', emoji: '🧠', desc: '5层AI路由主引擎' },
   { id: 'eastmoney', label: '东方财富', emoji: '📊', desc: '异动/龙虎榜/筹码/行情' },
   { id: 'iwencai', label: '问财选股', emoji: '🎯', desc: '自然语言选股/宏观/资讯' },
+  { id: 'trendradar', label: '舆情热点', emoji: '🔥', desc: '15平台实时热搜+金融分析' },
   { id: 'sina', label: '新浪财经', emoji: '💹', desc: '实时行情行情' },
   { id: 'plan_execute', label: 'PlanExecute', emoji: '🔬', desc: '多步深度分析引擎' },
+];
+
+const TRENDAR_PLATFORMS = [
+  { id: 'weibo', label: '微博' },
+  { id: 'baidu', label: '百度' },
+  { id: 'zhihu', label: '知乎' },
+  { id: 'douyin', label: '抖音' },
+  { id: 'toutiao', label: '头条' },
+  { id: 'bilibili', label: 'B站' },
+  { id: '36kr', label: '36氪' },
+  { id: 'eastmoney', label: '东财' },
 ];
 
 const IWENCAI_QUICK_QUERIES = [
@@ -22,6 +34,11 @@ const DataPanel = ({ sendPacket, messages }) => {
   const [queryInput, setQueryInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [searchChannel, setSearchChannel] = useState('news');
+  const [trPlatforms, setTrPlatforms] = useState(['weibo', 'baidu', 'zhihu', 'eastmoney']);
+  const [trKeyword, setTrKeyword] = useState('');
+  const [trResults, setTrResults] = useState(null);
+  const [trLoading, setTrLoading] = useState(false);
+  const [trTab, setTrTab] = useState('trending');
 
   const handleIwencaiQuery = () => {
     if (!queryInput.trim()) return;
@@ -41,6 +58,40 @@ const DataPanel = ({ sendPacket, messages }) => {
     if (!searchKeyword.trim()) return;
     sendPacket({ type: 'text_input', payload: { text: `搜索${searchChannel === 'report' ? '研报' : searchChannel === 'investor' ? '投资者关系' : searchChannel === 'announcement' ? '公告' : '新闻'}：${searchKeyword}` } });
     setSearchKeyword('');
+  };
+
+  const handleTrendradar = () => {
+    setTrLoading(true);
+    setTrResults(null);
+    const actionType = trTab === 'trending' ? 'trendradar_trending'
+      : trTab === 'search' ? 'trendradar_search'
+      : 'trendradar_sentiment';
+    const payload = { platforms: trPlatforms, limit: 20 };
+    if (trTab === 'search') payload.keyword = trKeyword.trim();
+
+    const handler = (msg) => {
+      if (msg.type === actionType) {
+        setTrResults(msg.payload || msg);
+        setTrLoading(false);
+        return true;
+      }
+      if (msg.type === 'error' && trLoading) {
+        setTrLoading(false);
+        return true;
+      }
+      return false;
+    };
+
+    sendPacket({ type: actionType, payload });
+
+    const timeout = setTimeout(() => {
+      setTrLoading(false);
+    }, 15000);
+
+    const originalHandler = handler;
+    const unsubscribe = () => { clearTimeout(timeout); };
+    window._trHandler = originalHandler;
+    window._trUnsubscribe = unsubscribe;
   };
 
   return (
@@ -133,6 +184,81 @@ const DataPanel = ({ sendPacket, messages }) => {
             cursor: searchKeyword.trim() ? 'pointer' : 'not-allowed', fontWeight: 600, fontSize: 13,
           }}>搜索</button>
         </div>
+      </div>
+
+      <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 16, marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>🔥 舆情热点监控</div>
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 8 }}>
+          15平台实时热搜 · 关键词搜索 · 金融舆情分析
+        </div>
+        <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+          {['trending', 'search', 'sentiment'].map(tab => (
+            <button key={tab} onClick={() => { setTrTab(tab); setTrResults(null); }} style={{
+              padding: '5px 10px', borderRadius: 8, fontSize: 11,
+              border: trTab === tab ? '1px solid #ff6b35' : '1px solid rgba(255,255,255,0.15)',
+              background: trTab === tab ? 'rgba(255,107,53,0.2)' : 'transparent',
+              color: trTab === tab ? 'white' : 'rgba(255,255,255,0.4)',
+              cursor: 'pointer',
+            }}>
+              {{ trending: '🔥热搜', search: '🔍搜索', sentiment: '📊舆情' }[tab]}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+          {TRENDAR_PLATFORMS.map(p => (
+            <button key={p.id} onClick={() => {
+              setTrPlatforms(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id]);
+            }} style={{
+              padding: '3px 8px', borderRadius: 6, fontSize: 10,
+              border: trPlatforms.includes(p.id) ? '1px solid #646cff' : '1px solid rgba(255,255,255,0.1)',
+              background: trPlatforms.includes(p.id) ? 'rgba(100,108,255,0.15)' : 'transparent',
+              color: trPlatforms.includes(p.id) ? 'white' : 'rgba(255,255,255,0.3)',
+              cursor: 'pointer',
+            }}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+        {trTab === 'search' && (
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            <input value={trKeyword} onChange={e => setTrKeyword(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && trKeyword.trim() && handleTrendradar()}
+              placeholder="输入关键词..." style={{
+                flex: 1, padding: '6px 10px', borderRadius: 8, fontSize: 12,
+                border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.05)',
+                color: 'white', outline: 'none',
+              }} />
+          </div>
+        )}
+        <button onClick={handleTrendradar} disabled={trTab === 'search' && !trKeyword.trim()} style={{
+          width: '100%', padding: '10px', borderRadius: 10, border: 'none',
+          background: trTab === 'search' && !trKeyword.trim() ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #ff6b35, #ff8f5e)',
+          color: trTab === 'search' && !trKeyword.trim() ? 'rgba(255,255,255,0.3)' : 'white',
+          cursor: trTab === 'search' && !trKeyword.trim() ? 'not-allowed' : 'pointer',
+          fontSize: 13, fontWeight: 700,
+        }}>
+          {trTab === 'trending' ? '🔥 获取热点' : trTab === 'search' ? '🔍 搜索热点' : '📊 舆情分析'}
+        </button>
+        {trLoading && <div style={{ textAlign: 'center', marginTop: 8, fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>⏳ 加载中...</div>}
+        {trResults && (
+          <div style={{ marginTop: 10, padding: '8px', borderRadius: 8, background: 'rgba(255,255,255,0.05)', maxHeight: 200, overflowY: 'auto', fontSize: 11 }}>
+            {trTab === 'sentiment' && trResults.platforms && trResults.platforms.map(p => (
+              <div key={p.platform_id} style={{ marginBottom: 6, padding: '4px 6px', borderRadius: 6, background: 'rgba(255,255,255,0.03)' }}>
+                <span style={{ fontWeight: 600 }}>{p.platform_name}</span>
+                <span style={{ color: 'rgba(255,255,255,0.4)' }}> · {p.total_topics}条 · 金融{p.finance_related}条({p.finance_ratio}%)</span>
+              </div>
+            ))}
+            {trTab !== 'sentiment' && trResults.items && trResults.items.slice(0, 15).map((item, i) => (
+              <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <span style={{ color: '#ff6b35', fontWeight: 600, marginRight: 4 }}>{item.rank || i + 1}</span>
+                <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 10, marginRight: 4 }}>[{item.platform_name}]</span>
+                <span>{item.title}</span>
+                {item.relevance && <span style={{ fontSize: 9, marginLeft: 4, color: item.relevance === 'high' ? '#4caf50' : '#ff9800' }}>{item.relevance === 'high' ? '高相关' : '相关'}</span>}
+              </div>
+            ))}
+            {!trResults.items?.length && trTab !== 'sentiment' && <div style={{ color: 'rgba(255,255,255,0.3)' }}>暂无数据</div>}
+          </div>
+        )}
       </div>
 
       <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 16 }}>
