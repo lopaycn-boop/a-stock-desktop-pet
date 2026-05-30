@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
+import { isTtsMuted } from './useSounds';
 
 export function useAudioQueue(live2dRef) {
   const [subtitle, setSubtitle] = useState("");
@@ -73,6 +74,11 @@ export function useAudioQueue(live2dRef) {
   }, [live2dRef]);
 
   const queueAudioChunk = useCallback((chunk) => {
+    if (isTtsMuted()) {
+      setSubtitle(chunk.text || '');
+      setTimeout(() => setSubtitle(''), 2000 + (chunk.text?.length || 0) * 80);
+      return;
+    }
     audioQueueRef.current.push(chunk);
     processQueue();
   }, [processQueue]);

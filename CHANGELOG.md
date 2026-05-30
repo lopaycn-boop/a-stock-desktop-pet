@@ -2,6 +2,24 @@
 
 All notable changes to 小土豆 AI操盘桌宠 will be documented in this file.
 
+## [1.5.0] - 2025-05-30
+
+### New Features
+- **Risk Control UI**: Stop-loss (3-10%), take-profit (5-20%), max positions (1-5), mode (conservative/moderate/aggressive) — settings panel sends WS `update_risk` commands
+- **Chat Export**: "📥 导出聊天记录" button in settings saves conversation as timestamped `.txt` file
+- **Sound Volume Control**: Settings slider controls trade signal, risk alert, and chat notification volume via localStorage
+- **TTS Mute**: Settings toggle mutes TTS voice output (shows text subtitle only)
+
+### UX Improvements
+- Settings panel now wired to actual behavior (opacity → Electron, always-on-top → Electron, auto-start → Electron, volume → useSounds, TTS mute → useAudioQueue)
+- Settings persist across restarts via localStorage
+
+### Technical
+- `useSounds.js` reads volume/mute from localStorage settings
+- `useAudioQueue.js` checks `isTtsMuted()` before playing audio, shows text-only when muted
+- `SettingsPanel.jsx` adds risk control section with `<select>` dropdowns
+- 204 tests passing
+
 ## [1.4.0] - 2025-05-30
 
 ### New Features

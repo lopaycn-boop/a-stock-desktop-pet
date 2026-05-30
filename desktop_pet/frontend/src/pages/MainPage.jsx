@@ -1307,6 +1307,8 @@ case 'billing_renewal_payment': {
             setAlwaysOnTop(next);
             if (window.potatoAPI?.setAlwaysOnTop) window.potatoAPI.setAlwaysOnTop(next);
           }}
+          messages={messages}
+          sendPacket={sendPacket}
         />
       )}
 

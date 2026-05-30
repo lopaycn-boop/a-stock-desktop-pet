@@ -11,6 +11,10 @@ const DEFAULTS = {
   alwaysOnTop: true,
   opacity: 1.0,
   autoStart: true,
+  riskStopLossPct: 5,
+  riskTakeProfitPct: 10,
+  riskMaxPositions: 3,
+  riskMode: 'conservative',
 };
 
 function loadSettings() {
@@ -25,7 +29,7 @@ function saveSettings(s) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (e) {}
 }
 
-export default function SettingsPanel({ onClose, wakeListening, toggleWakeWord, alwaysOnTop, onToggleAlwaysOnTop }) {
+export default function SettingsPanel({ onClose, wakeListening, toggleWakeWord, alwaysOnTop, onToggleAlwaysOnTop, messages, sendPacket }) {
   const [s, setS] = useState(loadSettings);
 
   const update = (key, val) => {
@@ -100,8 +104,58 @@ export default function SettingsPanel({ onClose, wakeListening, toggleWakeWord, 
             <Toggle label="开机自启" value={s.autoStart} onChange={v => update('autoStart', v)} />
           </Section>
 
+          <Section title="🛡️ 风控">
+            <Row label="止损">
+              <select value={s.riskStopLossPct} onChange={e => { const v = parseInt(e.target.value); update('riskStopLossPct', v); if (sendPacket) sendPacket({ type: 'update_risk', payload: { stop_loss_pct: v } }); }}
+                style={{ background: '#222', color: '#ccc', border: '1px solid #444', borderRadius: 6, padding: '4px 8px', fontSize: 13 }}>
+                <option value={3}>3%</option><option value={5}>5%</option><option value={8}>8%</option><option value={10}>10%</option>
+              </select>
+            </Row>
+            <Row label="止盈">
+              <select value={s.riskTakeProfitPct} onChange={e => { const v = parseInt(e.target.value); update('riskTakeProfitPct', v); if (sendPacket) sendPacket({ type: 'update_risk', payload: { take_profit_pct: v } }); }}
+                style={{ background: '#222', color: '#ccc', border: '1px solid #444', borderRadius: 6, padding: '4px 8px', fontSize: 13 }}>
+                <option value={5}>5%</option><option value={8}>8%</option><option value={10}>10%</option><option value={15}>15%</option><option value={20}>20%</option>
+              </select>
+            </Row>
+            <Row label="最多持仓">
+              <select value={s.riskMaxPositions} onChange={e => { const v = parseInt(e.target.value); update('riskMaxPositions', v); if (sendPacket) sendPacket({ type: 'update_risk', payload: { max_positions: v } }); }}
+                style={{ background: '#222', color: '#ccc', border: '1px solid #444', borderRadius: 6, padding: '4px 8px', fontSize: 13 }}>
+                <option value={1}>1只</option><option value={2}>2只</option><option value={3}>3只</option><option value={5}>5只</option>
+              </select>
+            </Row>
+            <Row label="模式">
+              <select value={s.riskMode} onChange={e => { update('riskMode', e.target.value); if (sendPacket) sendPacket({ type: 'update_risk', payload: { risk_mode: e.target.value } }); }}
+                style={{ background: '#222', color: '#ccc', border: '1px solid #444', borderRadius: 6, padding: '4px 8px', fontSize: 13 }}>
+                <option value="conservative">稳健</option><option value="moderate">均衡</option><option value="aggressive">激进</option>
+              </select>
+            </Row>
+          </Section>
+
+          <Section title="💾 数据">
+            <button onClick={() => {
+              if (!messages || messages.length === 0) return;
+              const lines = messages.map(m => {
+                const ts = m.ts ? new Date(m.ts).toLocaleString() : '';
+                const prefix = { user: '你', assistant: '土豆', system: '系统', image: '图片' }[m.type] || m.type;
+                return `[${ts}] ${prefix}: ${typeof m.content === 'string' ? m.content : ''}`;
+              });
+              const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `potato-chat-${new Date().toISOString().slice(0, 10)}.txt`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }} style={{
+              width: '100%', padding: '8px', borderRadius: 8, border: '1px solid rgba(105,240,174,0.3)',
+              background: 'rgba(105,240,174,0.08)', color: '#69f0ae', cursor: 'pointer', fontSize: 13,
+            }}>
+              📥 导出聊天记录 ({messages ? messages.length : 0}条)
+            </button>
+          </Section>
+
           <div style={{ fontSize: 11, color: '#555', textAlign: 'center', marginTop: 12 }}>
-            小土豆 AI操盘桌宠 v1.4.0 · 设置自动保存
+            小土豆 AI操盘桌宠 v1.5.0 · 设置自动保存
           </div>
         </div>
       </div>
