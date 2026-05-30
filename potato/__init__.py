@@ -1,3 +1,5 @@
 """小土豆 A股自主操盘手."""
 
-__version__ = "2.0.0"
+from potato.version import __version__, __author__, BUILD, FEATURES
+
+__all__ = ["__version__", "__author__", "BUILD", "FEATURES"]

@@ -204,23 +204,9 @@ app = FastAPI(
     redoc_url=None,
 )
 
-_DYNAMIC_ORIGINS: list[str] = []
-
-def _build_cors_origins(port: int) -> list[str]:
-    return [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        f"http://localhost:{port}",
-        f"http://127.0.0.1:{port}",
-        "http://localhost",
-        "http://127.0.0.1",
-    ]
-
-_ORIGIN_WHITELIST = _build_cors_origins(8000)
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_ORIGIN_WHITELIST,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|::1)(:\d+)?$",
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
@@ -3337,9 +3323,6 @@ if __name__ == "__main__":
     port = _find_available_port(preferred_port)
     if port != preferred_port:
         logger.warning("Port %d busy, using %d instead", preferred_port, port)
-    # Update CORS origins to match actual port
-    _ORIGIN_WHITELIST.clear()
-    _ORIGIN_WHITELIST.extend(_build_cors_origins(port))
     uvicorn.run(
         app,
         host="127.0.0.1",

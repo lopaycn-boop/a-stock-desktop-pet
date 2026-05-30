@@ -44,7 +44,7 @@
 │  └──────┬───────┘  └──────────┬───────────────────┘ │
 │         │    WebSocket (ws)   │                      │
 │  ┌──────┴────────────────────┴───────────────────┐  │
-│  │         FastAPI 后端 (Python :8000)            │  │
+│  │         FastAPI 后端 (Python :8000+)           │  │
 │  │  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │  │
 │  │  │ AI 服务   │ │ 交易引擎 │ │   风控系统      │ │  │
 │  │  │ 5层故障转移│ │ 7阶段调度 │ │ 15条规则       │ │  │
@@ -70,7 +70,7 @@
 
 ### 方式一：一键安装（推荐）
 
-1. 下载 `小土豆 AI操盘桌宠 Setup 1.0.0.exe`
+1. 下载 `小土豆 AI操盘桌宠 Setup 1.0.2.exe`
 2. 双击安装，自动启动
 3. 启动后粘贴 DeepSeek API Key → 完成
 4. (可选) 粘贴东方财富/问财API Key 解锁更多数据源
@@ -94,7 +94,7 @@ cd desktop_pet/frontend && npm install && cd ../..
 # Windows:
 desktop_pet\frontend\Start.vbs
 # 或手动启动:
-python -m potato                    # 后端 (:8000)
+python -m potato                    # 后端 (自动选择可用端口)
 cd desktop_pet/frontend && npm run dev  # 前端 (:5173)
 
 # 5. Electron 开发模式:

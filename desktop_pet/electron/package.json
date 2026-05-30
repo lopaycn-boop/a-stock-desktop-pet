@@ -41,7 +41,8 @@
       },
       {
         "from": "../../data",
-        "to": "data"
+        "to": "data",
+        "filter": ["**/*", "!*.db", "!*.sqlite", "!*.sqlite3", "!*.vault_salt", "!user_prefs.json"]
       }
     ],
     "win": {
